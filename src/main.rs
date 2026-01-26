@@ -660,21 +660,18 @@ fn main() {
             tls_settings.enable_h2();
             lb.add_tls_with_settings(&silo_cfg.gateway.address, None, tls_settings);
             
-            pb.finish_with_message(format!("{}Silo is ready! Listing on HTTPS {}", ROCKET, silo_cfg.gateway.address));
-            println!();
+            pb.set_message(format!("{}Gateway initialized for HTTPS {}", ROCKET, silo_cfg.gateway.address));
         } else {
             error!(
                 "TLS certificates not found at {}, starting without TLS",
                 cert_path
             );
             lb.add_tcp(&silo_cfg.gateway.address);
-            pb.finish_with_message(format!("{}Silo is ready! Listing on HTTP {}", ROCKET, silo_cfg.gateway.address));
-            println!();
+            pb.set_message(format!("{}Gateway initialized for HTTP {}", ROCKET, silo_cfg.gateway.address));
         }
     } else {
         lb.add_tcp(&silo_cfg.gateway.address);
-        pb.finish_with_message(format!("{}Silo is ready! Listing on HTTP {}", ROCKET, silo_cfg.gateway.address));
-        println!();
+        pb.set_message(format!("{}Gateway initialized for HTTP {}", ROCKET, silo_cfg.gateway.address));
     }
 
     server.add_service(lb);
@@ -688,6 +685,18 @@ fn main() {
         silo_cfg.gateway.metrics_address
     );
     server.add_service(prometheus_service_http);
+
+    pb.finish_with_message(format!(
+        "{}Initialization complete. Services are starting...",
+        ROCKET
+    ));
+    println!();
+    println!(
+        "{}\n",
+        style("  ✔ Silo is running and ready for traffic.")
+            .bold()
+            .green()
+    );
 
     server.run_forever();
 }
