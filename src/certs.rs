@@ -36,7 +36,7 @@ pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error>
     fs::create_dir_all(certs_dir.join("internal"))?;
 
     // 1. Generate Internal CA
-    let(ca_key, ca_cert) = generate_ca()?;
+    let(ca_key, ca_cert, ca_params) = generate_ca()?;
     write_cert_and_key(
         &ca_cert,
         &ca_key,
@@ -45,8 +45,10 @@ pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error>
     )?;
     info!("Generated Internal CA");
 
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+
     // 2. Generate Server Certificate (for Gateway TLS)
-    let (server_key, server_cert) = generate_server_cert()?;
+    let (server_key, server_cert) = generate_server_cert(&ca_issuer)?;
     write_cert_and_key(
         &server_cert,
         &server_key,
@@ -56,7 +58,7 @@ pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error>
     info!("Generated Server Certificate");
 
     // 3. Generate Control Plane Certificate
-    let (control_key, control_cert) = generate_control_cert()?;
+    let (control_key, control_cert) = generate_control_cert(&ca_issuer)?;
     write_cert_and_key(
         &control_cert,
         &control_key,
@@ -66,7 +68,7 @@ pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error>
     info!("Generated Control Plane Certificate");
 
     // 4. Generate Gateway Client Certificate
-    let (gateway_key, gateway_cert) = generate_gateway_cert()?;
+    let (gateway_key, gateway_cert) = generate_gateway_cert(&ca_issuer)?;
     write_cert_and_key(
         &gateway_cert,
         &gateway_key,
@@ -79,7 +81,7 @@ pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-fn generate_ca() -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_ca() -> Result<(KeyPair, Certificate, CertificateParams), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     params.distinguished_name = DistinguishedName::new();
@@ -89,10 +91,10 @@ fn generate_ca() -> Result<(KeyPair, Certificate), rcgen::Error> {
 
     let key_pair = KeyPair::generate()?;
     let cert = params.self_signed(&key_pair)?;
-    Ok((key_pair, cert))
+    Ok((key_pair, cert, params))
 }
 
-fn generate_server_cert() -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_server_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> Result<(KeyPair, Certificate), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     params
@@ -104,11 +106,11 @@ fn generate_server_cert() -> Result<(KeyPair, Certificate), rcgen::Error> {
     ];
 
     let key_pair = KeyPair::generate()?;
-    let cert = params.self_signed(&key_pair)?;
+    let cert = params.signed_by(&key_pair, issuer)?;
     Ok((key_pair, cert))
 }
 
-fn generate_control_cert() -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_control_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> Result<(KeyPair, Certificate), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     params
@@ -120,11 +122,11 @@ fn generate_control_cert() -> Result<(KeyPair, Certificate), rcgen::Error> {
     ];
 
     let key_pair = KeyPair::generate()?;
-    let cert = params.self_signed(&key_pair)?;
+    let cert = params.signed_by(&key_pair, issuer)?;
     Ok((key_pair, cert))
 }
 
-fn generate_gateway_cert() -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_gateway_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> Result<(KeyPair, Certificate), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     params
@@ -135,7 +137,7 @@ fn generate_gateway_cert() -> Result<(KeyPair, Certificate), rcgen::Error> {
     )];
 
     let key_pair = KeyPair::generate()?;
-    let cert = params.self_signed(&key_pair)?;
+    let cert = params.signed_by(&key_pair, issuer)?;
     Ok((key_pair, cert))
 }
 
