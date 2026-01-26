@@ -36,6 +36,34 @@ use api::ApiHandler;
 #[cfg(feature = "etcd")]
 use backend::etcd::EtcdBackend;
 use backend::{StorageBackend, VaultClient};
+use console::{style, Emoji};
+use indicatif::{ProgressBar, ProgressStyle};
+
+fn print_banner() {
+    let silo_art = r#"
+   _____ _ _      
+  / ____(_) |     
+ | (___  _| | ___ 
+  \___ \| | |/ _ \
+  ____) | | | (_) |
+ |_____/|_|_|\___/ 
+"#;
+    println!("{}", style(silo_art).bold().cyan());
+    println!(
+        " {} {}",
+        style("Secure Terraform State Gateway").italic().bright(),
+        style(format!("v{}", env!("CARGO_PKG_VERSION"))).dim()
+    );
+    println!(
+        " {}\n",
+        style("https://github.com/StanleyXie/silo").underlined().dim()
+    );
+}
+
+static LOOKING_GLASS: Emoji<'_, '_> = Emoji("🔍 ", "");
+static KEY: Emoji<'_, '_> = Emoji("🔑 ", "");
+static STORAGE: Emoji<'_, '_> = Emoji("📦 ", "");
+static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 
 pub struct ControlPlane {
     storage: Arc<dyn StorageBackend>,
@@ -301,26 +329,35 @@ impl ProxyHttp for Gateway {
 }
 
 fn main() {
-    env_logger::init();
-
-    // 1. Parse args first
-    // Handle --version manually because Pingora's Opt doesn't support it
+    // 1. Manually handle CLI flags that shouldn't trigger full startup
     let args: Vec<String> = env::args().collect();
     if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
         println!("silo {}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
-    // This allows --help to work
-    let opt = Opt::parse_args();
+    // Print banner immediately
+    print_banner();
+
+    // Configure logging - default to INFO if unset
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info");
+    }
+    env_logger::init();
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
     // 2. Load Configuration
-    // Search in priority:
-    // 1. SILO_CONFIG env var
-    // 2. Local directory
-    // 3. /etc/silo/
-    // 4. /usr/local/etc/silo/ (Intel Homebrew)
-    // 5. /opt/homebrew/etc/silo/ (Apple Silicon Homebrew)
+    pb.set_message(format!("{}Loading configuration...", LOOKING_GLASS));
+    let opt = Opt::parse_args();
+
     let config_path = env::var("SILO_CONFIG").unwrap_or_else(|_| {
         let paths = vec![
             "silo.yaml",
@@ -333,21 +370,21 @@ fn main() {
                 return path.to_string();
             }
         }
-        "silo.yaml".to_string() // Fallback to for error message
+        "silo.yaml".to_string()
     });
 
     let silo_cfg = config::Config::load(&config_path).unwrap_or_else(|e| {
-        error!("Failed to load configuration from {}: {}", config_path, e);
+        pb.finish_with_message(format!("{}Failed to load config: {}", style("x").red(), e));
         std::process::exit(1);
     });
-    info!("Configuration loaded from {}", config_path);
+    pb.set_message(format!("{}Configured from {}", LOOKING_GLASS, config_path));
 
-    // 3. Ensure certificates exist, generate if missing
+    // 3. Ensure certificates exist
+    pb.set_message(format!("{}Resolving certificates...", KEY));
     let certs_dir = certs::resolve_cert_paths(silo_cfg.certs_dir.as_deref()).unwrap_or_else(|e| {
-        error!("Failed to resolve/generate certificates: {}", e);
+        pb.finish_with_message(format!("{}Cert error: {}", style("x").red(), e));
         std::process::exit(1);
     });
-    info!("Using certificates from {:?}", certs_dir);
 
     // Update config paths to absolute paths if they are missing at current location
     let mut silo_cfg = silo_cfg;
@@ -384,7 +421,7 @@ fn main() {
         #[cfg(feature = "etcd")]
         "etcd" => {
             let etcd_cfg = silo_cfg.storage.etcd.expect("etcd configuration missing");
-            info!("Initializing Etcd backend at {:?}", etcd_cfg.endpoints);
+            pb.set_message(format!("{}Connecting to Etcd at {:?}...", STORAGE, etcd_cfg.endpoints));
 
             let endpoints: Vec<&str> = etcd_cfg.endpoints.iter().map(|s| s.as_str()).collect();
             let backend = rt
@@ -399,7 +436,7 @@ fn main() {
         }
         _ => {
             let vault_cfg = silo_cfg.storage.vault.expect("vault configuration missing");
-            info!("Initializing Vault backend at {}", vault_cfg.address);
+            pb.set_message(format!("{}Connecting to Vault at {}...", STORAGE, vault_cfg.address));
             Arc::new(VaultClient::new(vault_cfg.address, vault_cfg.token))
         }
     };
@@ -622,23 +659,22 @@ fn main() {
 
             tls_settings.enable_h2();
             lb.add_tls_with_settings(&silo_cfg.gateway.address, None, tls_settings);
-            info!(
-                "Gateway starting: HTTPS {} (Backend: {})",
-                silo_cfg.gateway.address, silo_cfg.storage.storage_type
-            );
+            
+            pb.finish_with_message(format!("{}Silo is ready! Listing on HTTPS {}", ROCKET, silo_cfg.gateway.address));
+            println!();
         } else {
             error!(
                 "TLS certificates not found at {}, starting without TLS",
                 cert_path
             );
             lb.add_tcp(&silo_cfg.gateway.address);
+            pb.finish_with_message(format!("{}Silo is ready! Listing on HTTP {}", ROCKET, silo_cfg.gateway.address));
+            println!();
         }
     } else {
-        info!(
-            "Gateway starting: HTTP {} (Backend: {})",
-            silo_cfg.gateway.address, silo_cfg.storage.storage_type
-        );
         lb.add_tcp(&silo_cfg.gateway.address);
+        pb.finish_with_message(format!("{}Silo is ready! Listing on HTTP {}", ROCKET, silo_cfg.gateway.address));
+        println!();
     }
 
     server.add_service(lb);

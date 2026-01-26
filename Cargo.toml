@@ -1,6 +1,6 @@
 [package]
 name = "silo"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Secure Terraform State Gateway with mTLS, OIDC, and governance controls"
 license = "MIT"
@@ -37,6 +37,8 @@ pingora-http = "0.6"
 pingora-openssl = { version = "0.6", optional = true }
 rcgen = "0.14.7"
 dirs = "6.0.0"
+indicatif = "0.17"
+console = "0.15"
 
 [build-dependencies]
 tonic-build = "0.11"
