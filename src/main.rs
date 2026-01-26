@@ -12,6 +12,7 @@ use pingora_proxy::{ProxyHttp, Session};
 mod api;
 mod auth;
 mod backend;
+mod certs;
 mod config;
 mod proto;
 
@@ -341,6 +342,37 @@ fn main() {
         std::process::exit(1);
     });
     info!("Configuration loaded from {}", config_path);
+
+    // 3. Ensure certificates exist, generate if missing
+    let certs_dir = certs::resolve_cert_paths(silo_cfg.certs_dir.as_deref()).unwrap_or_else(|e| {
+        error!("Failed to resolve/generate certificates: {}", e);
+        std::process::exit(1);
+    });
+    info!("Using certificates from {:?}", certs_dir);
+
+    // Update config paths to absolute paths if they are missing at current location
+    let mut silo_cfg = silo_cfg;
+    if !std::path::Path::new(&silo_cfg.gateway.tls.cert_path).exists() {
+        silo_cfg.gateway.tls.cert_path = certs_dir.join("server.crt").to_string_lossy().to_string();
+    }
+    if !std::path::Path::new(&silo_cfg.gateway.tls.key_path).exists() {
+        silo_cfg.gateway.tls.key_path = certs_dir.join("server.key").to_string_lossy().to_string();
+    }
+    if !std::path::Path::new(&silo_cfg.control_plane.tls.ca_cert).exists() {
+        silo_cfg.control_plane.tls.ca_cert = certs_dir.join("internal/ca.crt").to_string_lossy().to_string();
+    }
+    if !std::path::Path::new(&silo_cfg.control_plane.tls.server_cert).exists() {
+        silo_cfg.control_plane.tls.server_cert = certs_dir.join("internal/control.crt").to_string_lossy().to_string();
+    }
+    if !std::path::Path::new(&silo_cfg.control_plane.tls.server_key).exists() {
+        silo_cfg.control_plane.tls.server_key = certs_dir.join("internal/control.key").to_string_lossy().to_string();
+    }
+    if !std::path::Path::new(&silo_cfg.control_plane.tls.client_cert).exists() {
+        silo_cfg.control_plane.tls.client_cert = certs_dir.join("internal/gateway.crt").to_string_lossy().to_string();
+    }
+    if !std::path::Path::new(&silo_cfg.control_plane.tls.client_key).exists() {
+        silo_cfg.control_plane.tls.client_key = certs_dir.join("internal/gateway.key").to_string_lossy().to_string();
+    }
 
     let mut server = Server::new(Some(opt)).expect("Failed to initialize server");
     server.bootstrap();

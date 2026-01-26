@@ -9,6 +9,9 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Optional custom path for certificates. Defaults to ~/.silo/certs/
+    #[serde(default)]
+    pub certs_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

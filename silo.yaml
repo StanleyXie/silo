@@ -1,6 +1,10 @@
 # Silo Centralized Configuration
 # This file controls the behavior of both the Data Plane (Gateway) and Control Plane.
 
+# Optional: Custom directory for auto-generated or manual certificates.
+# Defaults to ~/.silo/certs/ if not specified.
+# certs_dir: "/path/to/custom/certs"
+
 # Gateway Configuration (Data Plane)
 gateway:
   address: "0.0.0.0:8443"
