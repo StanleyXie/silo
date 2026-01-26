@@ -1,8 +1,8 @@
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use log::info;
 
 /// JWKS (JSON Web Key Set) structure
 #[derive(Debug, Deserialize)]
@@ -15,28 +15,28 @@ pub struct Jwk {
     pub kty: String,
     pub kid: Option<String>,
     pub alg: Option<String>,
-    pub n: Option<String>,  // RSA modulus
-    pub e: Option<String>,  // RSA exponent
+    pub n: Option<String>, // RSA modulus
+    pub e: Option<String>, // RSA exponent
 }
 
 /// Standard OIDC claims
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OidcClaims {
-    pub sub: String,           // Subject (user identifier)
-    pub iss: String,           // Issuer
-    pub aud: Option<String>,   // Audience (may be array in some providers)
-    pub exp: i64,              // Expiration time
-    pub iat: i64,              // Issued at
-    
+    pub sub: String,         // Subject (user identifier)
+    pub iss: String,         // Issuer
+    pub aud: Option<String>, // Audience (may be array in some providers)
+    pub exp: i64,            // Expiration time
+    pub iat: i64,            // Issued at
+
     // GitHub Actions specific claims
     #[serde(default)]
-    pub actor: Option<String>,           // GitHub username
+    pub actor: Option<String>, // GitHub username
     #[serde(default)]
-    pub repository: Option<String>,      // e.g., "owner/repo"
+    pub repository: Option<String>, // e.g., "owner/repo"
     #[serde(default)]
-    pub workflow: Option<String>,        // Workflow name
+    pub workflow: Option<String>, // Workflow name
     #[serde(default)]
-    pub run_id: Option<String>,          // Workflow run ID
+    pub run_id: Option<String>, // Workflow run ID
 }
 
 /// OIDC Authenticator with JWKS caching
@@ -63,7 +63,9 @@ impl OidcAuthenticator {
         {
             let cache = self.jwks_cache.read().await;
             if let Some(ref jwks) = *cache {
-                return Ok(Jwks { keys: jwks.keys.clone() });
+                return Ok(Jwks {
+                    keys: jwks.keys.clone(),
+                });
             }
         }
 
@@ -84,7 +86,9 @@ impl OidcAuthenticator {
         // Update cache
         {
             let mut cache = self.jwks_cache.write().await;
-            *cache = Some(Jwks { keys: jwks.keys.clone() });
+            *cache = Some(Jwks {
+                keys: jwks.keys.clone(),
+            });
         }
 
         Ok(jwks)
@@ -103,27 +107,27 @@ impl OidcAuthenticator {
     /// Validate a JWT token and extract the identity
     pub async fn validate_token(&self, token: &str) -> Result<String, String> {
         // Decode header to get kid
-        let header = decode_header(token)
-            .map_err(|e| format!("Invalid JWT header: {}", e))?;
+        let header = decode_header(token).map_err(|e| format!("Invalid JWT header: {}", e))?;
 
         // Fetch JWKS
         let jwks = self.fetch_jwks().await?;
 
         // Find the key
-        let jwk = self.find_key(&jwks, header.kid.as_deref())
+        let jwk = self
+            .find_key(&jwks, header.kid.as_deref())
             .ok_or_else(|| "No matching key found in JWKS".to_string())?;
 
         // Build decoding key from JWK
         let n = jwk.n.as_ref().ok_or("Missing 'n' in JWK")?;
         let e = jwk.e.as_ref().ok_or("Missing 'e' in JWK")?;
-        
+
         let decoding_key = DecodingKey::from_rsa_components(n, e)
             .map_err(|e| format!("Invalid RSA components: {}", e))?;
 
         // Configure validation
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_issuer(&[&self.issuer]);
-        
+
         if let Some(ref aud) = self.audience {
             validation.set_audience(&[aud]);
         } else {
@@ -135,14 +139,14 @@ impl OidcAuthenticator {
             .map_err(|e| format!("JWT validation failed: {}", e))?;
 
         let claims = token_data.claims;
-        
-        // Extract identity - prefer actor (GitHub username) over sub
-        let identity = claims.actor
-            .clone()
-            .unwrap_or_else(|| claims.sub.clone());
 
-        info!("[OIDC] Token validated for identity: {} (iss: {}, repo: {:?})", 
-              identity, claims.iss, claims.repository);
+        // Extract identity - prefer actor (GitHub username) over sub
+        let identity = claims.actor.clone().unwrap_or_else(|| claims.sub.clone());
+
+        info!(
+            "[OIDC] Token validated for identity: {} (iss: {}, repo: {:?})",
+            identity, claims.iss, claims.repository
+        );
 
         Ok(identity)
     }
@@ -169,7 +173,7 @@ mod tests {
             "iat": 1700000000,
             "actor": "github-user"
         }"#;
-        
+
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
         assert_eq!(claims.actor, Some("github-user".to_string()));
     }

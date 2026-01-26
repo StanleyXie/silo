@@ -11,13 +11,3 @@ description = "Allowlisted files and patterns"
 paths = [
     '''scripts/verify_oidc\.sh''',
 ]
-
-# Specific commits to ignore (if needed)
-# commits = ["commit-sha-here"]
-
-# Rules to ignore certain patterns
-[[rules]]
-id = "curl-auth-header-test"
-description = "Allow test tokens in verification scripts"
-regex = '''invalid\.token\.here'''
-allowlist = true

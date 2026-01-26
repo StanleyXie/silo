@@ -1,10 +1,10 @@
+use super::StorageBackend;
+use crate::proto::v1::control_service_client::ControlServiceClient;
+use crate::proto::v1::storage_service_client::StorageServiceClient;
+use crate::proto::v1::{DeleteRequest, GetRequest, ListRequest, PutRequest};
 use async_trait::async_trait;
 use std::error::Error;
-use tonic::transport::{Channel, ClientTlsConfig, Identity, Certificate};
-use crate::proto::v1::storage_service_client::StorageServiceClient;
-use crate::proto::v1::control_service_client::ControlServiceClient;
-use crate::proto::v1::{GetRequest, PutRequest, DeleteRequest, ListRequest};
-use super::StorageBackend;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 pub struct GrpcStorageClient {
     client: StorageServiceClient<Channel>,
@@ -41,7 +41,11 @@ impl GrpcStorageClient {
 
 #[async_trait]
 impl StorageBackend for GrpcStorageClient {
-    async fn get_versioned(&self, path: &str, version: u32) -> Result<Option<(Vec<u8>, u32)>, Box<dyn Error + Send + Sync>> {
+    async fn get_versioned(
+        &self,
+        path: &str,
+        version: u32,
+    ) -> Result<Option<(Vec<u8>, u32)>, Box<dyn Error + Send + Sync>> {
         let mut client = self.client.clone();
         let request = GetRequest {
             path: path.to_string(),
@@ -57,7 +61,12 @@ impl StorageBackend for GrpcStorageClient {
         }
     }
 
-    async fn put(&self, path: &str, data: &[u8], base_version: u32) -> Result<u32, Box<dyn Error + Send + Sync>> {
+    async fn put(
+        &self,
+        path: &str,
+        data: &[u8],
+        base_version: u32,
+    ) -> Result<u32, Box<dyn Error + Send + Sync>> {
         let mut client = self.client.clone();
         let request = PutRequest {
             path: path.to_string(),
@@ -98,7 +107,7 @@ impl GrpcControlClient {
         let client = ControlServiceClient::connect(addr.to_string()).await?;
         Ok(GrpcControlClient { client })
     }
-    
+
     pub fn inner(&self) -> ControlServiceClient<Channel> {
         self.client.clone()
     }
