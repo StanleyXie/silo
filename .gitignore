@@ -1,0 +1,40 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Log files
+*.log
+
+# Etcd data directories
+*.etcd/
+default.etcd/
+
+# Binary directories
+bin/
+
+# Temporary test files
+silo_*_test.yaml
+silo_test.yaml
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Private keys (DO NOT COMMIT)
+*.key
+*.srl
+
+# Test artifacts
+curl_*.log
+matrix_*.log

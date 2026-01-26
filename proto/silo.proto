@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package silo.v1;
+
+// --- Data Plane -> Control Plane ---
+
+service ControlService {
+  // Check if a request is authorized and get routing/policy info
+  rpc Authorize (AuthorizeRequest) returns (AuthorizeResponse);
+  
+  // Update session/instance metadata
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message AuthorizeRequest {
+  string request_id = 1;
+  string identity = 2; // Extracted by Gateway (e.g. mTLS Subject)
+  string method = 3;
+  string path = 4;
+}
+
+message AuthorizeResponse {
+  bool authorized = 1;
+  string reason = 2;
+  map<string, string> metadata = 3; 
+}
+
+message HeartbeatRequest {
+  string instance_id = 1;
+  string lock_id = 2;
+  string project = 3;
+}
+
+message HeartbeatResponse {}
+
+// --- Control Plane -> Storage Layer ---
+
+service StorageService {
+  rpc Get (GetRequest) returns (GetResponse);
+  rpc Put (PutRequest) returns (PutResponse);
+  rpc Delete (DeleteRequest) returns (DeleteResponse);
+  rpc List (ListRequest) returns (ListResponse);
+}
+
+message GetRequest {
+  string path = 1;
+  string session_token = 2;
+  uint32 version = 3; // 0 = latest
+}
+
+message GetResponse {
+  bytes data = 1;
+  bool found = 2;
+  uint32 version = 3; // The specific version returned
+}
+
+message PutRequest {
+  string path = 1;
+  bytes data = 2;
+  string session_token = 3;
+  uint32 base_version = 4; // 0 = no CAS
+}
+
+message PutResponse {
+  bool success = 1;
+  uint32 version = 2; // The new version created
+}
+
+message DeleteRequest {
+  string path = 1;
+  string session_token = 2;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+message ListRequest {
+  string path = 1;
+}
+
+message ListResponse {
+  repeated string keys = 1;
+}

@@ -1,0 +1,39 @@
+# Silo Centralized Configuration
+# This file controls the behavior of both the Data Plane (Gateway) and Control Plane.
+
+# Gateway Configuration (Data Plane)
+gateway:
+  address: "0.0.0.0:8443"
+  metrics_address: "0.0.0.0:6192"
+  tls:
+    enabled: true
+    cert_path: "certs/server.crt"
+    key_path: "certs/server.key"
+
+# Control Plane Configuration
+control_plane:
+  address: "127.0.0.1:50051"
+  allowed_identities: ["stanley.xie", "bad.actor", "gateway.silo.internal"]
+  tls:
+    ca_cert: "certs/internal/ca.crt"
+    server_cert: "certs/internal/control.crt"
+    server_key: "certs/internal/control.key"
+    client_cert: "certs/internal/gateway.crt"
+    client_key: "certs/internal/gateway.key"
+
+# Storage Backend Configuration
+storage:
+  type: "vault" # Options: vault, etcd
+  vault:
+    address: "http://127.0.0.1:8200"
+    token: "root"
+  etcd:
+    endpoints: ["http://127.0.0.1:2389"]
+
+# Authentication Configuration
+auth:
+  oidc:
+    enabled: false  # Set to true to enable JWT/OIDC auth
+    issuer: "https://token.actions.githubusercontent.com"
+    jwks_uri: "https://token.actions.githubusercontent.com/.well-known/jwks"
+    audience: "silo.internal"  # Must match the `aud` claim in the JWT

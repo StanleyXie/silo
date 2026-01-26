@@ -1,0 +1,31 @@
+terraform {
+  encryption {
+    key_provider "pbkdf2" "passphrase" {
+      passphrase = "correct-horse-battery-staple"
+    }
+
+    method "aes_gcm" "aes" {
+      keys = key_provider.pbkdf2.passphrase
+    }
+
+    state {
+      method   = method.aes_gcm.aes
+      enforced = true
+    }
+  }
+
+  backend "http" {
+    # Configuration will be provided via environment variables, 
+    # but we explicitly skip verification for self-signed GW certs.
+    skip_cert_verification = true
+  }
+}
+
+resource "random_pet" "server" {
+  length    = 3
+  separator = "-"
+}
+
+output "server_name" {
+  value = random_pet.server.id
+}

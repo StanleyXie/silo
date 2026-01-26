@@ -1,0 +1,87 @@
+name: Test Silo OIDC Authentication
+
+on:
+  workflow_dispatch:  # Manual trigger for testing
+    inputs:
+      silo_url:
+        description: 'Silo Gateway URL (e.g., https://silo.example.com or ngrok URL)'
+        required: true
+        default: 'https://your-silo-endpoint:8443'
+
+permissions:
+  id-token: write   # Required for OIDC token
+  contents: read
+
+jobs:
+  test-oidc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get OIDC Token
+        id: get-token
+        run: |
+          # Request OIDC token from GitHub
+          TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                       "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=silo.internal" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          
+          # Debug: Show token claims (without signature)
+          echo "Token Header:"
+          echo $TOKEN | cut -d. -f1 | base64 -d 2>/dev/null | jq . || echo "(decode failed)"
+          echo "Token Payload:"
+          echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq . || echo "(decode failed)"
+
+      - name: Test Silo Authentication with OIDC
+        env:
+          SILO_URL: ${{ inputs.silo_url }}
+          OIDC_TOKEN: ${{ steps.get-token.outputs.token }}
+        run: |
+          echo "Testing OIDC authentication against Silo..."
+          
+          # Test GET state (should work with OIDC identity)
+          RESPONSE=$(curl -sk -w "\n%{http_code}" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            "$SILO_URL/v1/state/github-oidc-test")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Response Code: $HTTP_CODE"
+          echo "Response Body: $BODY"
+          
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "404" ]; then
+            echo "✅ OIDC authentication successful!"
+          elif [ "$HTTP_CODE" = "403" ]; then
+            echo "❌ OIDC token rejected - check Silo logs for identity"
+            echo "You may need to add the GitHub repository to allowed_identities"
+            exit 1
+          else
+            echo "⚠️ Unexpected response code: $HTTP_CODE"
+          fi
+
+      - name: Test Lock with OIDC
+        env:
+          SILO_URL: ${{ inputs.silo_url }}
+          OIDC_TOKEN: ${{ steps.get-token.outputs.token }}
+        run: |
+          echo "Testing lock acquisition with OIDC..."
+          
+          LOCK_DATA='{"ID":"github-'$GITHUB_RUN_ID'","Operation":"Plan","Who":"github-actions"}'
+          
+          RESPONSE=$(curl -sk -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$LOCK_DATA" \
+            "$SILO_URL/v1/lock/github-oidc-test")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "Lock Response Code: $HTTP_CODE"
+          
+          # Cleanup: Unlock
+          curl -sk -X DELETE \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            "$SILO_URL/v1/lock/github-oidc-test" || true
