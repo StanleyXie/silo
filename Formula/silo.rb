@@ -4,7 +4,7 @@
 class Silo < Formula
   desc "Secure Terraform State Gateway with mTLS, OIDC, and governance controls"
   homepage "https://github.com/StanleyXie/silo"
-  version "0.2.2"
+  version "0.2.3"
   license "MIT"
 
   on_macos do
@@ -26,7 +26,7 @@ class Silo < Formula
     bin.install "silo"
     
     # Install default config to etc
-    etc.install "silo.yaml" => "silo/silo.yaml" if File.exist?("silo.yaml")
+    (etc/"silo").install "silo.yaml" if File.exist?("silo.yaml")
   end
 
   def caveats
