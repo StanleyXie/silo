@@ -6,11 +6,13 @@ use async_trait::async_trait;
 use std::error::Error;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
+#[allow(dead_code)]
 pub struct GrpcStorageClient {
     client: StorageServiceClient<Channel>,
 }
 
 impl GrpcStorageClient {
+    #[allow(dead_code)]
     pub async fn new(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let client = StorageServiceClient::connect(addr.to_string()).await?;
         Ok(GrpcStorageClient { client })
@@ -98,16 +100,19 @@ impl StorageBackend for GrpcStorageClient {
     }
 }
 
+#[allow(dead_code)]
 pub struct GrpcControlClient {
     client: ControlServiceClient<Channel>,
 }
 
 impl GrpcControlClient {
+    #[allow(dead_code)]
     pub async fn new(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let client = ControlServiceClient::connect(addr.to_string()).await?;
         Ok(GrpcControlClient { client })
     }
 
+    #[allow(dead_code)]
     pub fn inner(&self) -> ControlServiceClient<Channel> {
         self.client.clone()
     }

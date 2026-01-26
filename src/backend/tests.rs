@@ -1,5 +1,5 @@
 use super::*;
-use base64::{engine::general_purpose, Engine as _};
+use base64::engine::general_purpose;
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -55,17 +55,21 @@ async fn test_put_state_success() {
 
     let state_data = b"new-state-data";
     // We expect the client to encode this in base64 inside the JSON body
-    let state_b64 = general_purpose::STANDARD.encode(state_data);
+    let _state_b64 = general_purpose::STANDARD.encode(state_data);
 
     Mock::given(method("PUT"))
         .and(path("/v1/secret/data/myproject/state"))
         .and(header("X-Vault-Token", "test-token"))
         // We can verify the body JSON if needed, but for now just responding OK suffices
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "version": 1
+            }
+        })))
         .mount(&mock_server)
         .await;
 
-    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-        client.put("secret/myproject/state", state_data).await;
+    let result: Result<u32, Box<dyn std::error::Error + Send + Sync>> =
+        client.put("secret/myproject/state", state_data, 0).await;
     assert!(result.is_ok());
 }

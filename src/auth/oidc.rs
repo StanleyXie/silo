@@ -14,7 +14,7 @@ pub struct Jwks {
 pub struct Jwk {
     pub kty: String,
     pub kid: Option<String>,
-    pub alg: Option<String>,
+    pub _alg: Option<String>,
     pub n: Option<String>, // RSA modulus
     pub e: Option<String>, // RSA exponent
 }
@@ -152,7 +152,7 @@ impl OidcAuthenticator {
     }
 
     /// Invalidate the JWKS cache (useful for key rotation)
-    pub async fn invalidate_cache(&self) {
+    pub async fn _invalidate_cache(&self) {
         let mut cache = self.jwks_cache.write().await;
         *cache = None;
         info!("[OIDC] JWKS cache invalidated");

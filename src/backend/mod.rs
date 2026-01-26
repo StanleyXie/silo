@@ -64,7 +64,7 @@ impl StorageBackend for VaultClient {
 
         let resp = self
             .client
-            .get(&self.url(&api_path))
+            .get(self.url(&api_path))
             .header("X-Vault-Token", &self.token)
             .send()
             .await?;
@@ -123,7 +123,7 @@ impl StorageBackend for VaultClient {
 
         let resp = self
             .client
-            .put(&self.url(&api_path))
+            .put(self.url(&api_path))
             .header("X-Vault-Token", &self.token)
             .json(&payload)
             .send()
@@ -151,7 +151,7 @@ impl StorageBackend for VaultClient {
 
         let resp = self
             .client
-            .delete(&self.url(&api_path))
+            .delete(self.url(&api_path))
             .header("X-Vault-Token", &self.token)
             .send()
             .await?;
@@ -175,7 +175,7 @@ impl StorageBackend for VaultClient {
             .client
             .request(
                 reqwest::Method::from_bytes(b"LIST").unwrap(),
-                &self.url(&api_path),
+                self.url(&api_path),
             )
             .header("X-Vault-Token", &self.token)
             .send()

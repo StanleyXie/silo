@@ -86,12 +86,12 @@ impl StorageService for ControlPlane {
         match self.storage.get_versioned(&req.path, req.version).await {
             Ok(Some((data, version))) => Ok(Response::new(GetResponse {
                 found: true,
-                data: data.into(),
+                data,
                 version,
             })),
             Ok(None) => Ok(Response::new(GetResponse {
                 found: false,
-                data: vec![].into(),
+                data: vec![],
                 version: 0,
             })),
             Err(e) => Err(Status::internal(e.to_string())),
@@ -187,8 +187,7 @@ impl ProxyHttp for Gateway {
         let bearer_identity = if let Some(ref oidc) = self.oidc_auth {
             if let Some(auth_header) = session.get_header("Authorization") {
                 if let Ok(auth_str) = auth_header.to_str() {
-                    if auth_str.starts_with("Bearer ") {
-                        let token = &auth_str[7..];
+                    if let Some(token) = auth_str.strip_prefix("Bearer ") {
                         match oidc.validate_token(token).await {
                             Ok(identity) => Some(identity),
                             Err(e) => {

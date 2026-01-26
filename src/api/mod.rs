@@ -106,9 +106,9 @@ impl ApiHandler {
                     session
                         .respond_error_with_body(
                             403,
-                            Bytes::from(format!(
-                                "Unauthorized: No policy found locally and CP is offline"
-                            )),
+                            Bytes::from(
+                                "Unauthorized: No policy found locally and CP is offline",
+                            ),
                         )
                         .await?;
                     return Ok(true);

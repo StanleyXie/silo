@@ -64,6 +64,7 @@ pub struct StorageConfig {
     #[serde(rename = "type")]
     pub storage_type: String,
     pub vault: Option<VaultConfig>,
+    #[allow(dead_code)]
     pub etcd: Option<EtcdConfig>,
 }
 
