@@ -304,7 +304,14 @@ fn main() {
     env_logger::init();
 
     // 1. Parse args first
-    // This allows --version and --help to work without a config file
+    // Handle --version manually because Pingora's Opt doesn't support it
+    let args: Vec<String> = env::args().collect();
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        println!("silo {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    // This allows --help to work
     let opt = Opt::parse_args();
 
     // 2. Load Configuration
