@@ -23,16 +23,14 @@ for cmd in "${PREREQS[@]}"; do
     fi
 done
 
-# Check for released silo (prioritize system PATH)
+# Check for released silo (strictly system PATH)
 if command -v silo &> /dev/null; then
     SILO_CMD="silo"
     log "Using released Silo: $(which silo)"
-elif [ -f "./target/release/silo" ]; then
-    SILO_CMD="./target/release/silo"
-    log "Using local release build: $SILO_CMD"
 else
     echo -e "${BOLD}Error:${NC} Silo binary not found in PATH."
-    echo -e "Please install it via Homebrew first:"
+    echo -e "This quickstart script ${BOLD}requires${NC} the official Homebrew release."
+    echo -e "Please install it first:"
     echo -e "   ${BOLD}brew install StanleyXie/tap/silo${NC}"
     exit 1
 fi
