@@ -210,8 +210,7 @@ impl ProxyHttp for Gateway {
         };
 
         // 2. mTLS identity
-        let mtls_identity = session
-            .stream()
+        let mtls_identity = session.stream()
             .and_then(|s| s.get_ssl())
             .and_then(|ssl| ssl.peer_certificate())
             .and_then(|cert| {
@@ -546,10 +545,12 @@ fn main() {
 
     let grpc_storage = rt
         .block_on(async {
-            backend::grpc::GrpcStorageClient::new_mtls(&format!(
-                "https://{}",
-                silo_cfg.control_plane.address
-            ))
+            backend::grpc::GrpcStorageClient::new_mtls(
+                &format!("https://{}", silo_cfg.control_plane.address),
+                &silo_cfg.control_plane.tls.client_cert,
+                &silo_cfg.control_plane.tls.client_key,
+                &silo_cfg.control_plane.tls.ca_cert,
+            )
             .await
         })
         .expect("Failed to connect to internal gRPC Storage");

@@ -18,10 +18,15 @@ impl GrpcStorageClient {
         Ok(GrpcStorageClient { client })
     }
 
-    pub async fn new_mtls(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let cert = tokio::fs::read("certs/internal/gateway.crt").await?;
-        let key = tokio::fs::read("certs/internal/gateway.key").await?;
-        let ca_cert = tokio::fs::read("certs/internal/ca.crt").await?;
+    pub async fn new_mtls(
+        addr: &str,
+        cert_path: &str,
+        key_path: &str,
+        ca_cert_path: &str,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let cert = tokio::fs::read(cert_path).await?;
+        let key = tokio::fs::read(key_path).await?;
+        let ca_cert = tokio::fs::read(ca_cert_path).await?;
 
         let identity = Identity::from_pem(cert, key);
         let ca = Certificate::from_pem(ca_cert);
