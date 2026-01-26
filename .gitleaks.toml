@@ -1,0 +1,23 @@
+# Gitleaks Configuration
+# See: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Silo Gitleaks Config"
+
+# Allowlist - Files and patterns that are known safe
+[allowlist]
+description = "Allowlisted files and patterns"
+
+# Test scripts with intentionally invalid/fake tokens
+paths = [
+    '''scripts/verify_oidc\.sh''',
+]
+
+# Specific commits to ignore (if needed)
+# commits = ["commit-sha-here"]
+
+# Rules to ignore certain patterns
+[[rules]]
+id = "curl-auth-header-test"
+description = "Allow test tokens in verification scripts"
+regex = '''invalid\.token\.here'''
+allowlist = true
