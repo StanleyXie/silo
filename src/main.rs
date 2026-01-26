@@ -303,13 +303,38 @@ impl ProxyHttp for Gateway {
 fn main() {
     env_logger::init();
 
-    // 1. Load Configuration
-    let config_path = env::var("SILO_CONFIG").unwrap_or_else(|_| "silo.yaml".to_string());
-    let silo_cfg = config::Config::load(&config_path).expect("Failed to load silo.yaml");
+    // 1. Parse args first
+    // This allows --version and --help to work without a config file
+    let opt = Opt::parse_args();
+
+    // 2. Load Configuration
+    // Search in priority:
+    // 1. SILO_CONFIG env var
+    // 2. Local directory
+    // 3. /etc/silo/
+    // 4. /usr/local/etc/silo/ (Intel Homebrew)
+    // 5. /opt/homebrew/etc/silo/ (Apple Silicon Homebrew)
+    let config_path = env::var("SILO_CONFIG").unwrap_or_else(|_| {
+        let paths = vec![
+            "silo.yaml",
+            "/etc/silo/silo.yaml",
+            "/usr/local/etc/silo/silo.yaml",
+            "/opt/homebrew/etc/silo/silo.yaml",
+        ];
+        for path in paths {
+            if std::path::Path::new(path).exists() {
+                return path.to_string();
+            }
+        }
+        "silo.yaml".to_string() // Fallback to for error message
+    });
+
+    let silo_cfg = config::Config::load(&config_path).unwrap_or_else(|e| {
+        error!("Failed to load configuration from {}: {}", config_path, e);
+        std::process::exit(1);
+    });
     info!("Configuration loaded from {}", config_path);
 
-    // Parse args
-    let opt = Opt::parse_args();
     let mut server = Server::new(Some(opt)).expect("Failed to initialize server");
     server.bootstrap();
 
