@@ -20,7 +20,6 @@ use pingora_core::listeners::TlsAccept;
 use pingora_core::protocols::tls::TlsRef;
 #[cfg(feature = "openssl")]
 use pingora_openssl::{nid::Nid, ssl::SslVerifyMode};
-use std::any::Any;
 
 use proto::v1::control_service_client::ControlServiceClient;
 use proto::v1::control_service_server::{ControlService, ControlServiceServer};
@@ -159,22 +158,9 @@ pub struct GatewayTlsCallbacks;
 #[async_trait]
 impl TlsAccept for GatewayTlsCallbacks {
     #[cfg(feature = "openssl")]
-    async fn handshake_complete_callback(
-        &self,
-        tls_ref: &TlsRef,
-    ) -> Option<Arc<dyn Any + Send + Sync>> {
-        // Extract Common Name (CN) from the client certificate
-        let common_name = tls_ref.peer_certificate().and_then(|cert| {
-            let cn = cert.subject_name().entries_by_nid(Nid::COMMONNAME).next()?;
-            Some(cn.data().as_utf8().ok()?.to_string())
-        });
-
-        if let Some(ref cn) = common_name {
-            info!("[mTLS] Handshake complete for identity: {}", cn);
-        }
-
-        let tls_info = TlsInfo { common_name };
-        Some(Arc::new(tls_info))
+    async fn certificate_callback(&self, _ssl: &mut TlsRef) -> () {
+        // certificate_callback is used for certificate selection/SNI
+        // mTLS extraction is now done in request_filter
     }
 }
 
@@ -225,10 +211,13 @@ impl ProxyHttp for Gateway {
 
         // 2. mTLS identity
         let mtls_identity = session
-            .digest()
-            .and_then(|digest| digest.ssl_digest.as_ref())
-            .and_then(|ssl_digest| ssl_digest.extension.get::<TlsInfo>())
-            .and_then(|info| info.common_name.clone());
+            .stream()
+            .and_then(|s| s.get_ssl())
+            .and_then(|ssl| ssl.peer_certificate())
+            .and_then(|cert| {
+                let cn = cert.subject_name().entries_by_nid(Nid::COMMONNAME).next()?;
+                cn.data().as_utf8().ok().map(|s| s.to_string())
+            });
 
         // 3. Header fallback
         let identity = bearer_identity

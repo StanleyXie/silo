@@ -411,7 +411,7 @@ impl ApiHandler {
                     request_id, config_path, version
                 );
                 match self.client.get_versioned(&config_path, version).await {
-                    Ok(Some((data, ver_id))) => {
+                    Ok(Some((data, _ver_id))) => {
                         session
                             .respond_error_with_body(200, Bytes::from(data))
                             .await?;
@@ -437,7 +437,7 @@ impl ApiHandler {
                 };
 
                 match self.client.put(&config_path, &body, 0).await {
-                    Ok(ver) => {
+                    Ok(_ver) => {
                         session
                             .respond_error_with_body(200, Bytes::from_static(b""))
                             .await?;
