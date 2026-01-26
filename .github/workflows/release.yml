@@ -97,6 +97,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Update Homebrew Formula
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          SHA_LINUX=$(grep silo-linux-amd64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
+          SHA_DARWIN_AMD64=$(grep silo-darwin-amd64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
+          SHA_DARWIN_ARM64=$(grep silo-darwin-arm64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
+          
+          # Update version and SHAs
+          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/silo.rb
+          sed -i "s/PLACEHOLDER_SHA256_LINUX_AMD64/$SHA_LINUX/" Formula/silo.rb
+          sed -i "s/PLACEHOLDER_SHA256_DARWIN_AMD64/$SHA_DARWIN_AMD64/" Formula/silo.rb
+          sed -i "s/PLACEHOLDER_SHA256_DARWIN_ARM64/$SHA_DARWIN_ARM64/" Formula/silo.rb
+          
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/silo.rb
+          git commit -m "chore: Update Homebrew formula for v$VERSION"
+          git push origin main
+
   docker:
     name: Build Docker Image
     needs: build-release
