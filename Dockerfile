@@ -1,6 +1,5 @@
-FROM alpine:3.19
+FROM gcr.io/distroless/cc-debian12
 
-RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
