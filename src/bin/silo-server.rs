@@ -354,7 +354,10 @@ impl ProxyHttp for Gateway {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let addr = self.backend_addr.replace("http://", "").replace("https://", "");
+        let addr = self
+            .backend_addr
+            .replace("http://", "")
+            .replace("https://", "");
         Ok(Box::new(HttpPeer::new(addr, false, "".to_string())))
     }
 }
@@ -484,7 +487,11 @@ fn main() {
             std::process::exit(1);
         }
         _ => {
-            let vault_cfg = silo_cfg.storage.vault.clone().expect("vault configuration missing");
+            let vault_cfg = silo_cfg
+                .storage
+                .vault
+                .clone()
+                .expect("vault configuration missing");
             pb.set_message(format!(
                 "{}Connecting to Vault at {}...",
                 STORAGE, vault_cfg.address
@@ -676,7 +683,11 @@ fn main() {
             handler,
             req_metric,
             oidc_auth,
-            backend_addr: silo_cfg.storage.vault.map(|v| v.address).unwrap_or_else(|| "127.0.0.1:8200".to_string()),
+            backend_addr: silo_cfg
+                .storage
+                .vault
+                .map(|v| v.address)
+                .unwrap_or_else(|| "127.0.0.1:8200".to_string()),
         },
     );
 

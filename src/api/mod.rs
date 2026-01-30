@@ -3,9 +3,9 @@ use crate::proto::v1::control_service_client::ControlServiceClient;
 use crate::proto::v1::{AuthorizeRequest, AuthorizeResponse};
 use bytes::Bytes;
 use log::{error, info};
-use serde_json::json;
 use pingora_core::Result;
 use pingora_proxy::Session;
+use serde_json::json;
 // use serde::Deserialize; (Handled in grouped import)
 use std::sync::Arc;
 use tonic::transport::Channel;
@@ -115,7 +115,9 @@ impl ApiHandler {
         });
 
         let status_code = if overall_healthy { 200 } else { 503 };
-        let _ = session.respond_error_with_body(status_code, Bytes::from(health_report.to_string())).await;
+        let _ = session
+            .respond_error_with_body(status_code, Bytes::from(health_report.to_string()))
+            .await;
         Ok(true)
     }
 
