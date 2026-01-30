@@ -15,7 +15,10 @@ enum Commands {
     /// Verifies the CLI is installed and working
     SelfTest,
     /// Check server status and client context
-    Status,
+    Status {
+        #[arg(long, default_value = "https://127.0.0.1:8443")]
+        endpoint: String,
+    },
     /// Authenticate with Silo (OIDC)
     Login {
         #[arg(long, default_value = "https://127.0.0.1:8443")]
@@ -37,20 +40,23 @@ async fn main() {
         Commands::SelfTest => {
             println!("✅ Silo CLI Core is operational.");
         }
-        Commands::Status => {
+        Commands::Status { endpoint } => {
             println!("🔍 Checking Silo status...");
 
             // 1. Check Server Connectivity
-            let url = "https://127.0.0.1:8443"; // Default for now, should use config later
+            let url = format!("{}/health", endpoint);
             let client = reqwest::Client::builder()
                 .danger_accept_invalid_certs(true) // For self-signed certs in dev
                 .build()
                 .unwrap();
 
-            match client.get(url).send().await {
+            match client.get(&url).send().await {
                 Ok(resp) => {
-                    println!("   ✅ Server is REACHABLE at {}", url);
-                    println!("   Status: {}", resp.status());
+                    if resp.status().is_success() {
+                        println!("   ✅ Server is REACHABLE at {}", endpoint);
+                    } else {
+                        println!("   ⚠️  Server is REACHABLE but returned: {}", resp.status());
+                    }
                 }
                 Err(e) => {
                     println!("   ❌ Server is UNREACHABLE at {}: {}", url, e);

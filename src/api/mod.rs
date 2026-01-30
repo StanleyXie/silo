@@ -93,6 +93,11 @@ impl ApiHandler {
                 .await;
         }
 
+        if path == "/health" || path == "/" {
+            let _ = session.respond_error(200).await;
+            return Ok(true);
+        }
+
         if !path.starts_with("/v1/state/")
             && !path.starts_with("/v1/lock/")
             && !path.starts_with("/v1/config/")
