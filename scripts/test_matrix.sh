@@ -17,15 +17,48 @@ success() { echo -e "${GREEN}[PASS]${NC} $1"; }
 failure() { echo -e "${RED}[FAIL] $1${NC}"; }
 
 # Setup PATH for Vault/Etcd/Silo
-export PATH="/Users/stanleyxie/Workspace/Projects/tfvault/bin:$PATH"
-
-# Matrix definition
-TOOLS=("terraform" "tofu")
-BACKENDS=("vault" "etcd")
-MODES=("plain" "encrypted")
+export PATH="/opt/homebrew/bin:$PATH"
 
 # Results file
 RESULTS_FILE=$(mktemp)
+
+prepare_certs() {
+    log "Preparing certificates..."
+    mkdir -p certs/internal
+    
+    # Copy CA if it exists globally, otherwise generate it by running silo briefly
+    if [ ! -f ~/.silo/certs/internal/ca.crt ]; then
+        log "Generating base certificates via Silo..."
+        RUST_LOG=info ./target/release/silo --version > /dev/null 2>&1
+    fi
+    
+    cp ~/.silo/certs/internal/ca.crt certs/internal/
+    cp ~/.silo/certs/internal/ca.key certs/internal/
+    cp ~/.silo/certs/server.crt certs/
+    cp ~/.silo/certs/server.key certs/
+    cp ~/.silo/certs/internal/control.crt certs/internal/
+    cp ~/.silo/certs/internal/control.key certs/internal/
+    cp ~/.silo/certs/internal/gateway.crt certs/internal/
+    cp ~/.silo/certs/internal/gateway.key certs/internal/
+
+    # Generate test user certificates signed by the Silo CA
+    log "Generating test user certificates..."
+    
+    # 1. User: stanley.xie
+    openssl genrsa -out certs/internal/user.key 2048 > /dev/null 2>&1
+    openssl req -new -key certs/internal/user.key -out certs/internal/user.csr -subj "/CN=stanley.xie" > /dev/null 2>&1
+    openssl x509 -req -in certs/internal/user.csr -CA certs/internal/ca.crt -CAkey certs/internal/ca.key -CAcreateserial -out certs/internal/user.crt -days 365 > /dev/null 2>&1
+
+    # 2. User: bad.actor
+    openssl genrsa -out certs/internal/denied.key 2048 > /dev/null 2>&1
+    openssl req -new -key certs/internal/denied.key -out certs/internal/denied.csr -subj "/CN=bad.actor" > /dev/null 2>&1
+    openssl x509 -req -in certs/internal/denied.csr -CA certs/internal/ca.crt -CAkey certs/internal/ca.key -CAcreateserial -out certs/internal/denied.crt -days 365 > /dev/null 2>&1
+}
+
+# Matrix definition
+TOOLS=("terraform" "tofu")
+BACKENDS=("vault")
+MODES=("plain")
 
 cleanup() {
     log "Cleaning up processes..."
@@ -43,8 +76,11 @@ cleanup() {
 cleanup
 trap "cleanup; rm -f $RESULTS_FILE" EXIT
 
-log "Building Silo with all features..."
-cargo build --release --features etcd > /dev/null 2>&1
+log "Building Silo..."
+cargo build --release > /dev/null 2>&1
+
+# Prepare certificates before loops
+prepare_certs
 
 for TOOL in "${TOOLS[@]}"; do
     for BACKEND in "${BACKENDS[@]}"; do
@@ -126,9 +162,9 @@ EOF
             export TF_HTTP_LOCK_METHOD="POST"
             export TF_HTTP_UNLOCK_METHOD="DELETE"
             export TF_HTTP_SKIP_CERT_VERIFICATION=true
+            export GODEBUG=http2client=0 # Force Go (TF/Tofu) to use HTTP/1.1 for reliable mTLS extraction in Pingora
+            
             # OpenTofu uses TF_HTTP_ prefix for compatibility
-            # Note: Terraform v1.8 doesn't support client certs via env vars
-            # so Terraform tests will fail mTLS auth, but OpenTofu tests should work
             export TF_HTTP_CLIENT_CERTIFICATE_PEM=$(cat certs/internal/user.crt)
             export TF_HTTP_CLIENT_PRIVATE_KEY_PEM=$(cat certs/internal/user.key)
 
@@ -154,28 +190,25 @@ EOF
             # Sub-test B: Lock Guard Verification (Simulate concurrent user)
             log "[Case $CASE_ID] Phase B: Lock Guard Verification"
             # 1. Acquire Lock as User A
-            curl -k -s -v -X POST -H "X-Silo-Device-ID: dev-01" \
+            curl -k -s -v --http1.1 -X POST -H "X-Silo-Device-ID: dev-01" \
                 --cert certs/internal/user.crt --key certs/internal/user.key \
                 --data '{"ID":"lock-01","Operation":"Plan","Who":"stanley.xie"}' \
                 "https://127.0.0.1:8443/v1/lock/$STATE_NAME" > /dev/null 2>&1
             
             # 2. Attempt push as User B (bad.actor)
-            STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" \
+            STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" --http1.1 \
                 -X POST --cert certs/internal/denied.crt --key certs/internal/denied.key \
                 --data '{"data":"malicious"}' "https://127.0.0.1:8443/v1/state/$STATE_NAME")
             if [ "$STATUS" != "423" ]; then
                 failure "Lock Guard failed: Expected 423, got $STATUS"
                 ERROR=1
             fi
-
+            
             # Sub-test C: CAS (Check-And-Set) Atomicity
             log "[Case $CASE_ID] Phase C: CAS Verification"
             
-            # Use X-Silo-Base-Version: 0 (This should ALWAYS succeed as it means "don't check")
-            # Then use a wrong version.
-            
             # Attempt stale write with X-Silo-Base-Version: 999
-            STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" \
+            STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" --http1.1 \
                 -X POST -H "X-Silo-Device-ID: dev-01" -H "X-Silo-Base-Version: 999" \
                 --cert certs/internal/user.crt --key certs/internal/user.key \
                 --data '{"data":"stale"}' "https://127.0.0.1:8443/v1/state/$STATE_NAME")

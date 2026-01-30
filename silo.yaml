@@ -11,19 +11,19 @@ gateway:
   metrics_address: "0.0.0.0:6192"
   tls:
     enabled: true
-    cert_path: "certs/server.crt"
-    key_path: "certs/server.key"
+    cert_path: "/Users/stanleyxie/.silo/certs/server.crt"
+    key_path: "/Users/stanleyxie/.silo/certs/server.key"
 
 # Control Plane Configuration
 control_plane:
   address: "127.0.0.1:50051"
   allowed_identities: ["stanley.xie", "bad.actor", "gateway.silo.internal"]
   tls:
-    ca_cert: "certs/internal/ca.crt"
-    server_cert: "certs/internal/control.crt"
-    server_key: "certs/internal/control.key"
-    client_cert: "certs/internal/gateway.crt"
-    client_key: "certs/internal/gateway.key"
+    ca_cert: "/Users/stanleyxie/.silo/certs/internal/ca.crt"
+    server_cert: "/Users/stanleyxie/.silo/certs/internal/control.crt"
+    server_key: "/Users/stanleyxie/.silo/certs/internal/control.key"
+    client_cert: "/Users/stanleyxie/.silo/certs/internal/gateway.crt"
+    client_key: "/Users/stanleyxie/.silo/certs/internal/gateway.key"
 
 # Storage Backend Configuration
 storage:
@@ -38,6 +38,15 @@ storage:
 auth:
   oidc:
     enabled: false  # Set to true to enable JWT/OIDC auth
-    issuer: "https://token.actions.githubusercontent.com"
-    jwks_uri: "https://token.actions.githubusercontent.com/.well-known/jwks"
-    audience: "silo.internal"  # Must match the `aud` claim in the JWT
+    issuer: "https://gateway.silo.internal"
+    jwks_uri: "https://gateway.silo.internal/.well-known/jwks"
+    audience: "silo.internal"
+
+  native:
+    enabled: true
+    jwt_secret: "super-secret-silo-key-2026"
+    users:
+      # Default user 'admin' with password 'silo123'
+      - username: "admin"
+        password_hash: "$2b$12$KEOVLz9bXshP8BdAmX5upOD7MANNNAnSWDAvE0bURnIsYZUUCNVXG" # 'silo123'
+        roles: ["admin"]

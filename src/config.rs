@@ -18,6 +18,30 @@ pub struct Config {
 pub struct AuthConfig {
     #[serde(default)]
     pub oidc: OidcConfig,
+    #[serde(default)]
+    pub native: NativeAuthConfig,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct NativeAuthConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub users: Vec<NativeUser>,
+    #[serde(default = "default_jwt_secret")]
+    pub jwt_secret: String,
+}
+
+fn default_jwt_secret() -> String {
+    "silo-default-secret-change-me".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct NativeUser {
+    pub username: String,
+    pub password_hash: String,
+    #[serde(default)]
+    pub roles: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]

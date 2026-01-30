@@ -1,5 +1,5 @@
 use log::info;
-use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair, SanType, IsCa, BasicConstraints};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ pub fn certs_exist(certs_dir: &Path) -> bool {
 }
 
 /// Generate all required certificates for Silo
-pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Generating certificates in {:?}", certs_dir);
 
     // Create directories
@@ -146,7 +146,7 @@ fn write_cert_and_key(
     key_pair: &KeyPair,
     cert_path: &Path,
     key_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Write certificate
     let mut cert_file = File::create(cert_path)?;
     cert_file.write_all(cert.pem().as_bytes())?;
@@ -161,7 +161,7 @@ fn write_cert_and_key(
 /// Get resolved certificate paths, generating certs if needed
 pub fn resolve_cert_paths(
     config_certs_dir: Option<&str>,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
+) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
     let certs_dir = config_certs_dir
         .map(PathBuf::from)
         .unwrap_or_else(default_certs_dir);
@@ -177,4 +177,30 @@ pub fn resolve_cert_paths(
     }
 
     Ok(certs_dir)
+}
+
+/// Generate a dynamic user certificate signed by the internal CA
+pub fn generate_dynamic_user_cert(
+    certs_dir: &Path,
+    username: &str,
+) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    let ca_key_pem = fs::read_to_string(certs_dir.join("internal/ca.key"))?;
+    let ca_key = KeyPair::from_pem(&ca_key_pem)?;
+    
+    let mut ca_params = CertificateParams::default();
+    ca_params.distinguished_name = DistinguishedName::new();
+    ca_params.distinguished_name.push(DnType::CommonName, "Silo Internal CA");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    
+    let issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+
+    let mut user_params = CertificateParams::default();
+    user_params.distinguished_name = DistinguishedName::new();
+    user_params.distinguished_name.push(DnType::CommonName, username);
+    user_params.subject_alt_names = vec![SanType::DnsName(username.to_string().try_into().unwrap())];
+
+    let user_key = KeyPair::generate()?;
+    let user_cert = user_params.signed_by(&user_key, &issuer)?;
+    
+    Ok((user_cert.pem(), user_key.serialize_pem()))
 }
