@@ -103,6 +103,16 @@ impl StorageBackend for GrpcStorageClient {
         let response = client.list(request).await?;
         Ok(response.into_inner().keys)
     }
+
+    async fn health(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut client = self.client.clone();
+        // A simple list on a non-existent path to verify connectivity
+        let request = ListRequest {
+            path: "health-check".to_string(),
+        };
+        client.list(request).await?;
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]

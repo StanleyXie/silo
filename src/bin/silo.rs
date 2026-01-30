@@ -52,10 +52,30 @@ async fn main() {
 
             match client.get(&url).send().await {
                 Ok(resp) => {
-                    if resp.status().is_success() {
-                        println!("   ✅ Server is REACHABLE at {}", endpoint);
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+
+                    if status.is_success() {
+                        println!("   ✅ Server is HEALTHY at {}", endpoint);
                     } else {
-                        println!("   ⚠️  Server is REACHABLE but returned: {}", resp.status());
+                        println!("   ❌ Server is UNHEALTHY at {}", endpoint);
+                        println!("      Status: {}", status);
+                    }
+
+                    if !json.is_null() {
+                        if let Some(components) = json.get("components") {
+                            println!("      Components:");
+                            if let Some(obj) = components.as_object() {
+                                for (name, stat) in obj {
+                                    let icon = if stat == "UP" { "✅" } else { "❌" };
+                                    println!("      - {}: {} {}", name, icon, stat);
+                                }
+                            }
+                        }
+                        if let Some(ver) = json.get("version") {
+                            println!("      Version: {}", ver);
+                        }
                     }
                 }
                 Err(e) => {

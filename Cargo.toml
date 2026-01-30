@@ -1,6 +1,6 @@
 [package]
 name = "silo"
-version = "0.3.14"
+version = "0.3.15"
 edition = "2021"
 description = "Secure Terraform State Gateway with mTLS, OIDC, and governance controls"
 license = "MIT"

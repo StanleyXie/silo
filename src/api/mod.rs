@@ -3,6 +3,7 @@ use crate::proto::v1::control_service_client::ControlServiceClient;
 use crate::proto::v1::{AuthorizeRequest, AuthorizeResponse};
 use bytes::Bytes;
 use log::{error, info};
+use serde_json::json;
 use pingora_core::Result;
 use pingora_proxy::Session;
 // use serde::Deserialize; (Handled in grouped import)
@@ -77,6 +78,47 @@ impl ApiHandler {
         }
     }
 
+    async fn handle_health(&self, session: &mut Session) -> Result<bool> {
+        let mut storage_status = "UP";
+        let mut control_status = "UP";
+        let mut overall_healthy = true;
+
+        if let Err(e) = self.client.health().await {
+            storage_status = "DOWN";
+            overall_healthy = false;
+            error!("Health Check: Storage Backend is DOWN: {}", e);
+        }
+
+        // Check Control Plane (gRPC)
+        let mut control_client = self.control.clone();
+        if let Err(e) = control_client
+            .heartbeat(crate::proto::v1::HeartbeatRequest {
+                instance_id: "health-check".to_string(),
+                lock_id: "health-check".to_string(),
+                project: "health-check".to_string(),
+            })
+            .await
+        {
+            control_status = "DOWN";
+            overall_healthy = false;
+            error!("Health Check: Control Plane is DOWN: {}", e);
+        }
+
+        let health_report = json!({
+            "status": if overall_healthy { "UP" } else { "DOWN" },
+            "version": env!("CARGO_PKG_VERSION"),
+            "components": {
+                "gateway": "UP",
+                "storage": storage_status,
+                "control_plane": control_status,
+            }
+        });
+
+        let status_code = if overall_healthy { 200 } else { 503 };
+        let _ = session.respond_error_with_body(status_code, Bytes::from(health_report.to_string())).await;
+        Ok(true)
+    }
+
     pub async fn handle(
         &self,
         session: &mut Session,
@@ -94,8 +136,7 @@ impl ApiHandler {
         }
 
         if path == "/health" || path == "/" {
-            let _ = session.respond_error(200).await;
-            return Ok(true);
+            return self.handle_health(session).await;
         }
 
         if !path.starts_with("/v1/state/")

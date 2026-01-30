@@ -83,4 +83,10 @@ impl StorageBackend for EtcdBackend {
             .collect();
         Ok(keys)
     }
+
+    async fn health(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut client = self.client.clone();
+        client.status().await?;
+        Ok(())
+    }
 }

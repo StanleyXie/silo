@@ -24,6 +24,7 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<u32, Box<dyn Error + Send + Sync>>;
     async fn delete(&self, path: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn list(&self, path: &str) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+    async fn health(&self) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 pub struct VaultClient {
@@ -202,6 +203,22 @@ impl StorageBackend for VaultClient {
             .unwrap_or_default();
 
         Ok(keys)
+    }
+
+    async fn health(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let resp = self
+            .client
+            .get(self.url("sys/health"))
+            .header("X-Vault-Token", &self.token)
+            .send()
+            .await?;
+
+        if resp.status().is_success() || resp.status() == 429 {
+            // 429 means active/standby but healthy in Vault terms
+            Ok(())
+        } else {
+            Err(format!("Vault Unhealthy: {}", resp.status()).into())
+        }
     }
 }
 
