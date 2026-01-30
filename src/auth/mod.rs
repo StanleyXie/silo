@@ -1,5 +1,5 @@
-pub mod oidc;
 pub mod native;
+pub mod oidc;
 
-pub use oidc::OidcAuthenticator;
 pub use native::NativeIdentityService;
+pub use oidc::OidcAuthenticator;

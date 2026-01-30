@@ -32,12 +32,12 @@ use tonic::transport::{
 };
 use tonic::{Request, Response, Status};
 
+use console::{style, Emoji};
+use indicatif::{ProgressBar, ProgressStyle};
 use silo::api::ApiHandler;
 #[cfg(feature = "etcd")]
 use silo::backend::etcd::EtcdBackend;
 use silo::backend::{StorageBackend, VaultClient};
-use console::{style, Emoji};
-use indicatif::{ProgressBar, ProgressStyle};
 
 fn print_banner() {
     let silo_art = r#"
@@ -56,7 +56,9 @@ fn print_banner() {
     );
     println!(
         " {}\n",
-        style("https://github.com/StanleyXie/silo").underlined().dim()
+        style("https://github.com/StanleyXie/silo")
+            .underlined()
+            .dim()
     );
 }
 
@@ -241,17 +243,28 @@ impl ProxyHttp for Gateway {
         let mtls_identity = if let Some(stream) = session.stream() {
             if let Some(ssl) = stream.get_ssl() {
                 if let Some(cert) = ssl.peer_certificate() {
-                    let cn = cert.subject_name().entries_by_nid(Nid::COMMONNAME).next().and_then(|cn| {
-                        cn.data().as_utf8().ok().map(|s| s.to_string())
-                    });
-                    info!("[{}] mTLS (Stream): Found cert with CN={:?}", ctx.request_id, cn);
+                    let cn = cert
+                        .subject_name()
+                        .entries_by_nid(Nid::COMMONNAME)
+                        .next()
+                        .and_then(|cn| cn.data().as_utf8().ok().map(|s| s.to_string()));
+                    info!(
+                        "[{}] mTLS (Stream): Found cert with CN={:?}",
+                        ctx.request_id, cn
+                    );
                     cn
                 } else {
-                    info!("[{}] mTLS (Stream): No peer certificate found", ctx.request_id);
+                    info!(
+                        "[{}] mTLS (Stream): No peer certificate found",
+                        ctx.request_id
+                    );
                     None
                 }
             } else {
-                info!("[{}] mTLS (Stream): No SSL session in stream", ctx.request_id);
+                info!(
+                    "[{}] mTLS (Stream): No SSL session in stream",
+                    ctx.request_id
+                );
                 None
             }
         } else {
@@ -259,7 +272,11 @@ impl ProxyHttp for Gateway {
             // We should try to get the SSL info from the underlying connection if possible.
             // However, in Pingora 0.6.0 request_filter, if stream() is None and it's H2,
             // we might be out of luck unless we use a different accessor.
-            info!("[{}] mTLS: No stream found in session (Protocol: {:?})", ctx.request_id, session.is_http2());
+            info!(
+                "[{}] mTLS: No stream found in session (Protocol: {:?})",
+                ctx.request_id,
+                session.is_http2()
+            );
             None
         };
 
@@ -412,19 +429,34 @@ fn main() {
         silo_cfg.gateway.tls.key_path = certs_dir.join("server.key").to_string_lossy().to_string();
     }
     if !std::path::Path::new(&silo_cfg.control_plane.tls.ca_cert).exists() {
-        silo_cfg.control_plane.tls.ca_cert = certs_dir.join("internal/ca.crt").to_string_lossy().to_string();
+        silo_cfg.control_plane.tls.ca_cert = certs_dir
+            .join("internal/ca.crt")
+            .to_string_lossy()
+            .to_string();
     }
     if !std::path::Path::new(&silo_cfg.control_plane.tls.server_cert).exists() {
-        silo_cfg.control_plane.tls.server_cert = certs_dir.join("internal/control.crt").to_string_lossy().to_string();
+        silo_cfg.control_plane.tls.server_cert = certs_dir
+            .join("internal/control.crt")
+            .to_string_lossy()
+            .to_string();
     }
     if !std::path::Path::new(&silo_cfg.control_plane.tls.server_key).exists() {
-        silo_cfg.control_plane.tls.server_key = certs_dir.join("internal/control.key").to_string_lossy().to_string();
+        silo_cfg.control_plane.tls.server_key = certs_dir
+            .join("internal/control.key")
+            .to_string_lossy()
+            .to_string();
     }
     if !std::path::Path::new(&silo_cfg.control_plane.tls.client_cert).exists() {
-        silo_cfg.control_plane.tls.client_cert = certs_dir.join("internal/gateway.crt").to_string_lossy().to_string();
+        silo_cfg.control_plane.tls.client_cert = certs_dir
+            .join("internal/gateway.crt")
+            .to_string_lossy()
+            .to_string();
     }
     if !std::path::Path::new(&silo_cfg.control_plane.tls.client_key).exists() {
-        silo_cfg.control_plane.tls.client_key = certs_dir.join("internal/gateway.key").to_string_lossy().to_string();
+        silo_cfg.control_plane.tls.client_key = certs_dir
+            .join("internal/gateway.key")
+            .to_string_lossy()
+            .to_string();
     }
 
     let mut server = Server::new(Some(opt)).expect("Failed to initialize server");
@@ -438,7 +470,10 @@ fn main() {
         #[cfg(feature = "etcd")]
         "etcd" => {
             let etcd_cfg = silo_cfg.storage.etcd.expect("etcd configuration missing");
-            pb.set_message(format!("{}Connecting to Etcd at {:?}...", STORAGE, etcd_cfg.endpoints));
+            pb.set_message(format!(
+                "{}Connecting to Etcd at {:?}...",
+                STORAGE, etcd_cfg.endpoints
+            ));
 
             let endpoints: Vec<&str> = etcd_cfg.endpoints.iter().map(|s| s.as_str()).collect();
             let backend = rt
@@ -453,7 +488,10 @@ fn main() {
         }
         _ => {
             let vault_cfg = silo_cfg.storage.vault.expect("vault configuration missing");
-            pb.set_message(format!("{}Connecting to Vault at {}...", STORAGE, vault_cfg.address));
+            pb.set_message(format!(
+                "{}Connecting to Vault at {}...",
+                STORAGE, vault_cfg.address
+            ));
             Arc::new(VaultClient::new(vault_cfg.address, vault_cfg.token))
         }
     };
@@ -682,19 +720,28 @@ fn main() {
 
             tls_settings.enable_h2();
             lb.add_tls_with_settings(&silo_cfg.gateway.address, None, tls_settings);
-            
-            pb.set_message(format!("{}Gateway initialized for HTTPS {}", ROCKET, silo_cfg.gateway.address));
+
+            pb.set_message(format!(
+                "{}Gateway initialized for HTTPS {}",
+                ROCKET, silo_cfg.gateway.address
+            ));
         } else {
             error!(
                 "TLS certificates not found at {}, starting without TLS",
                 cert_path
             );
             lb.add_tcp(&silo_cfg.gateway.address);
-            pb.set_message(format!("{}Gateway initialized for HTTP {}", ROCKET, silo_cfg.gateway.address));
+            pb.set_message(format!(
+                "{}Gateway initialized for HTTP {}",
+                ROCKET, silo_cfg.gateway.address
+            ));
         }
     } else {
         lb.add_tcp(&silo_cfg.gateway.address);
-        pb.set_message(format!("{}Gateway initialized for HTTP {}", ROCKET, silo_cfg.gateway.address));
+        pb.set_message(format!(
+            "{}Gateway initialized for HTTP {}",
+            ROCKET, silo_cfg.gateway.address
+        ));
     }
 
     server.add_service(lb);
