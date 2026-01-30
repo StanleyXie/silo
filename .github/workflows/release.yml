@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write # Needed for some OIDC flows if used later
 
 env:
   CARGO_TERM_COLOR: always
