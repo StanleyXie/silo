@@ -33,10 +33,10 @@ pub struct SessionMetadata {
 
 use crate::auth::NativeIdentityService;
 use askama::Template;
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::{distributions::Alphanumeric, Rng};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -88,7 +88,9 @@ impl ApiHandler {
         let method = session.req_header().method.clone();
 
         if path.starts_with("/auth/") {
-             return self.handle_auth(session, &method, &path, request_id, client_ip).await;
+            return self
+                .handle_auth(session, &method, &path, request_id, client_ip)
+                .await;
         }
 
         if !path.starts_with("/v1/state/")
@@ -542,11 +544,20 @@ impl ApiHandler {
             match *method {
                 http::Method::GET => {
                     let query = session.req_header().uri.query().unwrap_or("");
-                    let params: std::collections::HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes()).into_owned().collect();
-                    
-                    let redirect_uri = params.get("redirect_uri").map(|s| s.as_str()).unwrap_or("/");
+                    let params: std::collections::HashMap<String, String> =
+                        url::form_urlencoded::parse(query.as_bytes())
+                            .into_owned()
+                            .collect();
+
+                    let redirect_uri = params
+                        .get("redirect_uri")
+                        .map(|s| s.as_str())
+                        .unwrap_or("/");
                     let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
-                    let response_type = params.get("response_type").map(|s| s.as_str()).unwrap_or("code");
+                    let response_type = params
+                        .get("response_type")
+                        .map(|s| s.as_str())
+                        .unwrap_or("code");
                     let client_id = params.get("client_id").map(|s| s.as_str()).unwrap_or("");
 
                     let template = LoginTemplate {
@@ -556,57 +567,75 @@ impl ApiHandler {
                         client_id,
                         error: None,
                     };
-                    
-                    let html = template.render().unwrap_or_else(|_| "Error rendering template".into());
-                    
-                    let mut resp_header = Box::new(pingora_http::ResponseHeader::build(200, Some(3)).unwrap());
-                    resp_header.insert_header("Content-Type", "text/html").unwrap();
-                    resp_header.insert_header("Content-Length", html.len()).unwrap();
-                    
+
+                    let html = template
+                        .render()
+                        .unwrap_or_else(|_| "Error rendering template".into());
+
+                    let mut resp_header =
+                        Box::new(pingora_http::ResponseHeader::build(200, Some(3)).unwrap());
+                    resp_header
+                        .insert_header("Content-Type", "text/html")
+                        .unwrap();
+                    resp_header
+                        .insert_header("Content-Length", html.len())
+                        .unwrap();
+
                     session.write_response_header(resp_header, false).await?;
-                    session.write_response_body(Some(bytes::Bytes::from(html)), true).await?;
+                    session
+                        .write_response_body(Some(bytes::Bytes::from(html)), true)
+                        .await?;
                     return Ok(true);
-                },
+                }
                 http::Method::POST => {
                     let body = match session.read_request_body().await? {
-                       Some(b) => b,
-                       None => Bytes::new(),
+                        Some(b) => b,
+                        None => Bytes::new(),
                     };
-                    let params: std::collections::HashMap<String, String> = url::form_urlencoded::parse(&body).into_owned().collect();
-                    
+                    let params: std::collections::HashMap<String, String> =
+                        url::form_urlencoded::parse(&body).into_owned().collect();
+
                     let username = params.get("username").map(|s| s.as_str()).unwrap_or("");
                     let password = params.get("password").map(|s| s.as_str()).unwrap_or("");
-                    let redirect_uri = params.get("redirect_uri").map(|s| s.as_str()).unwrap_or("/");
+                    let redirect_uri = params
+                        .get("redirect_uri")
+                        .map(|s| s.as_str())
+                        .unwrap_or("/");
                     let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
-                    
+
                     if let Some(_roles) = self.native_auth.validate(username, password) {
-                         let code: String = rand::thread_rng()
+                        let code: String = rand::thread_rng()
                             .sample_iter(&Alphanumeric)
                             .take(16)
                             .map(char::from)
                             .collect();
-                         
-                         let code_path = format!("secret/silo/codes/{}", code);
-                         let code_data = serde_json::json!({
-                            "username": username,
-                            "roles": _roles,
-                            "ttl": chrono::Utc::now().to_rfc3339()
-                         });
-                         if let Err(e) = self.client.put(&code_path, code_data.to_string().as_bytes(), 0).await {
-                             error!("Failed to store auth code: {}", e);
-                         } else {
-                             info!("Stored auth code at {}", code_path);
-                         }
 
-                         let location = format!("{}?code={}&state={}", redirect_uri, code, state);
-                         
-                         let mut resp_header = Box::new(pingora_http::ResponseHeader::build(302, Some(0)).unwrap());
-                         resp_header.insert_header("Location", location).unwrap();
-                         session.write_response_header(resp_header, true).await?;
-                         // session.write_response_body(None, true).await?; // Header implicitly ends stream if true?
-                         return Ok(true);
+                        let code_path = format!("secret/silo/codes/{}", code);
+                        let code_data = serde_json::json!({
+                           "username": username,
+                           "roles": _roles,
+                           "ttl": chrono::Utc::now().to_rfc3339()
+                        });
+                        if let Err(e) = self
+                            .client
+                            .put(&code_path, code_data.to_string().as_bytes(), 0)
+                            .await
+                        {
+                            error!("Failed to store auth code: {}", e);
+                        } else {
+                            info!("Stored auth code at {}", code_path);
+                        }
+
+                        let location = format!("{}?code={}&state={}", redirect_uri, code, state);
+
+                        let mut resp_header =
+                            Box::new(pingora_http::ResponseHeader::build(302, Some(0)).unwrap());
+                        resp_header.insert_header("Location", location).unwrap();
+                        session.write_response_header(resp_header, true).await?;
+                        // session.write_response_body(None, true).await?; // Header implicitly ends stream if true?
+                        return Ok(true);
                     } else {
-                         let template = LoginTemplate {
+                        let template = LoginTemplate {
                             redirect_uri,
                             state,
                             response_type: "code",
@@ -614,122 +643,159 @@ impl ApiHandler {
                             error: Some("Invalid Username or Password"),
                         };
                         let html = template.render().unwrap();
-                        let mut resp_header = Box::new(pingora_http::ResponseHeader::build(401, Some(3)).unwrap());
-                        resp_header.insert_header("Content-Type", "text/html").unwrap();
+                        let mut resp_header =
+                            Box::new(pingora_http::ResponseHeader::build(401, Some(3)).unwrap());
+                        resp_header
+                            .insert_header("Content-Type", "text/html")
+                            .unwrap();
                         session.write_response_header(resp_header, false).await?;
-                        session.write_response_body(Some(Bytes::from(html)), true).await?;
+                        session
+                            .write_response_body(Some(Bytes::from(html)), true)
+                            .await?;
                         return Ok(true);
                     }
                 }
                 _ => {}
             }
         }
-        
+
         // Handle /auth/token (Exchange Code for Token)
         if path == "/auth/token" && *method == http::Method::POST {
-             let body = match session.read_request_body().await? {
+            let body = match session.read_request_body().await? {
                 Some(b) => b,
                 None => Bytes::new(),
-             };
-             let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(&body).into_owned().collect();
-             let code = params.get("code").map(|s| s.as_str()).unwrap_or("");
-             
-             let code_path = format!("secret/silo/codes/{}", code);
-             match self.client.get(&code_path).await {
-                 Ok(Some(data)) => {
-                      let code_info: serde_json::Value = serde_json::from_slice(&data).unwrap();
-                      let username = code_info.get("username").and_then(|v| v.as_str()).unwrap_or("anonymous");
-                      let roles: Vec<String> = code_info.get("roles").and_then(|v| v.as_array()).map(|arr| {
-                          arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                      }).unwrap_or_default();
-                      
-                      // Mint real JWT
-                      let expiration = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize;
-                      let claims = Claims {
-                          sub: username.to_string(),
-                          roles: roles.clone(),
-                          exp: expiration,
-                      };
-                      
-                      let token = match encode(
-                          &Header::default(),
-                          &claims,
-                          &EncodingKey::from_secret(self.native_auth.config.jwt_secret.as_bytes())
-                      ) {
-                          Ok(t) => t,
-                          Err(e) => {
-                              error!("JWT Encoding Error: {}", e);
-                              session.respond_error_with_body(500, Bytes::from("Token generation failed")).await?;
-                              return Ok(true);
-                          }
-                      };
-                      
-                      let token_resp = serde_json::json!({
-                          "access_token": token,
-                          "id_token": token, // For OIDC compatibility
-                          "token_type": "Bearer",
-                          "expires_in": 3600,
-                          "identity": {
-                              "username": username,
-                              "roles": roles
-                          }
-                      });
-                      
-                      // Burn the code (One-time use)
-                      let _ = self.client.delete(&code_path).await;
-                      
-                      session.respond_error_with_body(200, Bytes::from(token_resp.to_string())).await?;
-                      return Ok(true);
-                 },
-                 _ => {
-                      session.respond_error_with_body(400, Bytes::from("Invalid Code")).await?;
-                      return Ok(true);
-                 }
-             }
+            };
+            let params: std::collections::HashMap<_, _> =
+                url::form_urlencoded::parse(&body).into_owned().collect();
+            let code = params.get("code").map(|s| s.as_str()).unwrap_or("");
+
+            let code_path = format!("secret/silo/codes/{}", code);
+            match self.client.get(&code_path).await {
+                Ok(Some(data)) => {
+                    let code_info: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                    let username = code_info
+                        .get("username")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("anonymous");
+                    let roles: Vec<String> = code_info
+                        .get("roles")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    // Mint real JWT
+                    let expiration =
+                        (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize;
+                    let claims = Claims {
+                        sub: username.to_string(),
+                        roles: roles.clone(),
+                        exp: expiration,
+                    };
+
+                    let token = match encode(
+                        &Header::default(),
+                        &claims,
+                        &EncodingKey::from_secret(self.native_auth.config.jwt_secret.as_bytes()),
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            error!("JWT Encoding Error: {}", e);
+                            session
+                                .respond_error_with_body(
+                                    500,
+                                    Bytes::from("Token generation failed"),
+                                )
+                                .await?;
+                            return Ok(true);
+                        }
+                    };
+
+                    let token_resp = serde_json::json!({
+                        "access_token": token,
+                        "id_token": token, // For OIDC compatibility
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "identity": {
+                            "username": username,
+                            "roles": roles
+                        }
+                    });
+
+                    // Burn the code (One-time use)
+                    let _ = self.client.delete(&code_path).await;
+
+                    session
+                        .respond_error_with_body(200, Bytes::from(token_resp.to_string()))
+                        .await?;
+                    return Ok(true);
+                }
+                _ => {
+                    session
+                        .respond_error_with_body(400, Bytes::from("Invalid Code"))
+                        .await?;
+                    return Ok(true);
+                }
+            }
         }
 
         // Handle /auth/exchange (Exchange JWT for mTLS Certs)
         if path == "/auth/exchange" && *method == http::Method::POST {
-            let auth_header = session.req_header().headers.get("Authorization")
+            let auth_header = session
+                .req_header()
+                .headers
+                .get("Authorization")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-                
+
             if !auth_header.starts_with("Bearer ") {
-                 session.respond_error_with_body(401, Bytes::from("Missing Bearer Token")).await?;
-                 return Ok(true);
+                session
+                    .respond_error_with_body(401, Bytes::from("Missing Bearer Token"))
+                    .await?;
+                return Ok(true);
             }
-            
+
             let jwt = &auth_header[7..];
             let token_data = match decode::<Claims>(
                 jwt,
                 &DecodingKey::from_secret(self.native_auth.config.jwt_secret.as_bytes()),
-                &Validation::default()
+                &Validation::default(),
             ) {
                 Ok(data) => data,
                 Err(e) => {
                     info!("JWT Validation Failed: {}", e);
-                    session.respond_error_with_body(401, Bytes::from(format!("Invalid Token: {}", e))).await?;
+                    session
+                        .respond_error_with_body(401, Bytes::from(format!("Invalid Token: {}", e)))
+                        .await?;
                     return Ok(true);
                 }
             };
-            
+
             let username = token_data.claims.sub;
             info!("Generating mTLS certificate for user: {}", username);
-            
+
             match crate::certs::generate_dynamic_user_cert(&self.certs_dir, &username) {
                 Ok((crt, key)) => {
-                    let ca_pem = std::fs::read_to_string(self.certs_dir.join("internal/ca.crt")).unwrap_or_default();
+                    let ca_pem = std::fs::read_to_string(self.certs_dir.join("internal/ca.crt"))
+                        .unwrap_or_default();
                     let resp = serde_json::json!({
                         "certificate": crt,
                         "private_key": key,
                         "ca": ca_pem,
                         "identity": username
                     });
-                    session.respond_error_with_body(200, Bytes::from(resp.to_string())).await?;
-                },
+                    session
+                        .respond_error_with_body(200, Bytes::from(resp.to_string()))
+                        .await?;
+                }
                 Err(e) => {
                     error!("Cert Generation failed: {}", e);
-                    session.respond_error_with_body(500, Bytes::from("Certificate generation failure")).await?;
+                    session
+                        .respond_error_with_body(500, Bytes::from("Certificate generation failure"))
+                        .await?;
                 }
             }
             return Ok(true);

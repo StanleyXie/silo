@@ -1,5 +1,5 @@
 use crate::config::NativeAuthConfig;
-use bcrypt::{hash, verify, DEFAULT_COST};
+use bcrypt::verify;
 use log::{info, warn};
 
 #[derive(Clone)]
@@ -25,7 +25,10 @@ impl NativeIdentityService {
                             info!("Native auth successful for user: {}", username);
                             return Some(user.roles.clone());
                         } else {
-                            warn!("Native auth failed for user: {} (invalid password)", username);
+                            warn!(
+                                "Native auth failed for user: {} (invalid password)",
+                                username
+                            );
                         }
                     }
                     Err(e) => {
@@ -40,7 +43,7 @@ impl NativeIdentityService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use bcrypt::{hash, DEFAULT_COST};
 
     #[test]
     fn generate_default_hash() {

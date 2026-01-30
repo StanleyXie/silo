@@ -1,5 +1,8 @@
 use log::info;
-use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair, SanType, IsCa, BasicConstraints};
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
+    SanType,
+};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -36,7 +39,7 @@ pub fn generate_certs(certs_dir: &Path) -> Result<(), Box<dyn std::error::Error 
     fs::create_dir_all(certs_dir.join("internal"))?;
 
     // 1. Generate Internal CA
-    let(ca_key, ca_cert, ca_params) = generate_ca()?;
+    let (ca_key, ca_cert, ca_params) = generate_ca()?;
     write_cert_and_key(
         &ca_cert,
         &ca_key,
@@ -94,7 +97,9 @@ fn generate_ca() -> Result<(KeyPair, Certificate, CertificateParams), rcgen::Err
     Ok((key_pair, cert, params))
 }
 
-fn generate_server_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_server_cert(
+    issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>,
+) -> Result<(KeyPair, Certificate), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     params
@@ -110,7 +115,9 @@ fn generate_server_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> R
     Ok((key_pair, cert))
 }
 
-fn generate_control_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_control_cert(
+    issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>,
+) -> Result<(KeyPair, Certificate), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     params
@@ -126,7 +133,9 @@ fn generate_control_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> 
     Ok((key_pair, cert))
 }
 
-fn generate_gateway_cert(issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>) -> Result<(KeyPair, Certificate), rcgen::Error> {
+fn generate_gateway_cert(
+    issuer: &rcgen::Issuer<'_, impl rcgen::SigningKey>,
+) -> Result<(KeyPair, Certificate), rcgen::Error> {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     params
@@ -167,10 +176,7 @@ pub fn resolve_cert_paths(
         .unwrap_or_else(default_certs_dir);
 
     if !certs_exist(&certs_dir) {
-        info!(
-            "Certificates not found in {:?}, generating...",
-            certs_dir
-        );
+        info!("Certificates not found in {:?}, generating...", certs_dir);
         generate_certs(&certs_dir)?;
     } else {
         info!("Using existing certificates from {:?}", certs_dir);
@@ -186,21 +192,26 @@ pub fn generate_dynamic_user_cert(
 ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
     let ca_key_pem = fs::read_to_string(certs_dir.join("internal/ca.key"))?;
     let ca_key = KeyPair::from_pem(&ca_key_pem)?;
-    
+
     let mut ca_params = CertificateParams::default();
     ca_params.distinguished_name = DistinguishedName::new();
-    ca_params.distinguished_name.push(DnType::CommonName, "Silo Internal CA");
+    ca_params
+        .distinguished_name
+        .push(DnType::CommonName, "Silo Internal CA");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    
+
     let issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
 
     let mut user_params = CertificateParams::default();
     user_params.distinguished_name = DistinguishedName::new();
-    user_params.distinguished_name.push(DnType::CommonName, username);
-    user_params.subject_alt_names = vec![SanType::DnsName(username.to_string().try_into().unwrap())];
+    user_params
+        .distinguished_name
+        .push(DnType::CommonName, username);
+    user_params.subject_alt_names =
+        vec![SanType::DnsName(username.to_string().try_into().unwrap())];
 
     let user_key = KeyPair::generate()?;
     let user_cert = user_params.signed_by(&user_key, &issuer)?;
-    
+
     Ok((user_cert.pem(), user_key.serialize_pem()))
 }
