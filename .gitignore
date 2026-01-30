@@ -9,8 +9,9 @@ Cargo.lock
 *.etcd/
 default.etcd/
 
-# Binary directories
+# Binaries
 bin/
+!src/bin/
 
 # Temporary test files
 silo_*_test.yaml
