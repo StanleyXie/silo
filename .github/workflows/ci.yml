@@ -102,5 +102,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Audit dependencies
-        run: cargo audit
+        run: |
+          cargo install cargo-audit
+          cargo audit
         continue-on-error: true

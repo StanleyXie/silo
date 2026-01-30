@@ -68,7 +68,8 @@ async fn main() {
                 Ok(resp) => {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
-                    let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                    let json: serde_json::Value =
+                        serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
 
                     if status.is_success() {
                         println!("   ✅ Server is HEALTHY at {}", endpoint);
@@ -300,7 +301,9 @@ async fn main() {
             }
 
             if !crt_path.exists() || !key_path.exists() {
-                println!("❌ Error: Credentials not found. Run 'silo init' and 'silo login' first.");
+                println!(
+                    "❌ Error: Credentials not found. Run 'silo init' and 'silo login' first."
+                );
                 std::process::exit(1);
             }
 
@@ -330,10 +333,10 @@ async fn main() {
             std::process::exit(1);
         }
         Commands::Init { non_interactive } => {
-            handle_init(non_interactive.clone()).await;
+            handle_init(*non_interactive).await;
         }
         Commands::Up { detach } => {
-            handle_up(detach.clone()).await;
+            handle_up(*detach).await;
         }
     }
 }
@@ -360,11 +363,16 @@ async fn handle_init(non_interactive: bool) {
     }
 
     // 2. Generate config
-    if Path::new("silo.yaml").exists() {
-        if !non_interactive && !Confirm::new().with_prompt("silo.yaml already exists. Overwrite?").interact().unwrap() {
-            println!("Aborting.");
-            return;
-        }
+    if Path::new("silo.yaml").exists()
+        && !non_interactive
+        && !Confirm::new()
+            .with_prompt("silo.yaml already exists. Overwrite?")
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+    {
+        println!("❌ Aborted.");
+        return;
     }
 
     match manager.generate_default_config() {
@@ -379,7 +387,7 @@ async fn handle_init(non_interactive: bool) {
     if !certs_dir.exists() {
         std::fs::create_dir_all(&certs_dir).unwrap();
     }
-    
+
     // Call the internal certificate generation logic
     match silo::certs::generate_certs(&certs_dir) {
         Ok(_) => println!("✅ Certificates generated in {:?}", certs_dir),
@@ -401,7 +409,11 @@ async fn handle_up(detach: bool) {
 
     // 1. Start Vault
     let pb = ProgressBar::new_spinner();
-    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} {msg}").unwrap());
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
     pb.set_message("Starting Vault (Dev Mode)...");
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
@@ -411,7 +423,7 @@ async fn handle_up(detach: bool) {
             pb.finish_with_message(format!("❌ Vault failed: {}", e));
             // Maybe it's already running? Let's check.
             if e.to_string().contains("responding") {
-                 println!("   (Vault might be already running or unreachable)");
+                println!("   (Vault might be already running or unreachable)");
             }
         }
     }
@@ -438,7 +450,7 @@ async fn handle_up(detach: bool) {
     // 3. Health Check
     println!("🔍 Finalizing health check...");
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    
+
     // We should call the status logic here but for now just print success
     println!("\n🚀 Silo is UP and HEALTHY.");
 }
