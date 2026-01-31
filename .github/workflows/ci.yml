@@ -106,3 +106,55 @@ jobs:
           cargo install cargo-audit
           cargo audit
         continue-on-error: true
+
+  bump-and-tag:
+    name: Bump Version & Tag
+    needs: [test, build, security]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Get next version
+        id: next_version
+        uses: anothrNick/github-tag-action@1.67.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WITH_V: true
+          DEFAULT_BUMP: patch
+          DRY_RUN: true
+
+      - name: Update Version in Files
+        run: |
+          NEW_TAG=${{ steps.next_version.outputs.new_tag }}
+          NEW_VER=${NEW_TAG#v}
+          echo "Updating files to version $NEW_VER"
+          
+          # Update Cargo.toml
+          python3 -c "import re; v='$NEW_VER'; c=open('Cargo.toml').read(); c=re.sub(r'^version = \".*?\"', f'version = \"{v}\"', c, count=1, flags=re.M); open('Cargo.toml', 'w').write(c)"
+          
+          # Update Formula/silo.rb
+          python3 -c "import re; v='$NEW_VER'; c=open('Formula/silo.rb').read(); c=re.sub(r'version \".*?\"', f'version \"{v}\"', c, count=1); open('Formula/silo.rb', 'w').write(c)"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Formula/silo.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump version to $NEW_TAG [skip ci]"
+            git push origin main
+          else
+            echo "No changes to commit"
+          fi
+
+      - name: Push Tag
+        uses: anothrNick/github-tag-action@1.67.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          WITH_V: true
+          DEFAULT_BUMP: patch
