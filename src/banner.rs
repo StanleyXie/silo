@@ -33,8 +33,8 @@ pub fn print_banner() {
         };
         let right = icon[i];
         
-        // Print text on left (cyan), icon on right (cyan bold)
-        println!("  {}{}", style(format!("{: <25}", left)).cyan(), style(right).cyan().bold());
+        // Increased width for the text column to avoid overlap with the T-icon
+        println!("  {}{}", style(format!("{: <42}", left)).cyan(), style(right).cyan().bold());
     }
     println!();
 }
