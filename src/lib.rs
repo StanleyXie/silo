@@ -5,3 +5,4 @@ pub mod bootstrap;
 pub mod certs;
 pub mod config;
 pub mod proto;
+pub mod banner;

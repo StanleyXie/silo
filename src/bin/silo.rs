@@ -55,6 +55,7 @@ async fn main() {
             println!("✅ Silo CLI Core is operational.");
         }
         Commands::Status { endpoint } => {
+            silo::banner::print_banner();
             println!("🔍 Checking Silo status...");
 
             // 1. Check Server Connectivity
@@ -342,6 +343,7 @@ async fn main() {
 }
 
 async fn handle_init(non_interactive: bool) {
+    silo::banner::print_banner();
     println!("🚀 Initializing Silo Setup...");
     let manager = BootstrapManager::new("silo.yaml");
 
@@ -404,6 +406,7 @@ async fn handle_up(detach: bool) {
         return;
     }
 
+    silo::banner::print_banner();
     println!("⬆️ Starting Silo Environment...");
     let manager = BootstrapManager::new("silo.yaml");
 

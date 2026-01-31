@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/logo_horizontal.png" alt="Silo Logo" width="100%">
+</p>
+
 # Silo: Secure Terraform State Gateway
 
 Silo is a secure, mTLS-enabled gateway for Terraform/OpenTofu state, built on top of [Pingora](https://github.com/cloudflare/pingora). It provides centralized governance, locking, and atomic state protection for infrastructure-as-code.
