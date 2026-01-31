@@ -9,7 +9,10 @@ pub fn print_banner() {
         r#" ____) | | | (_) |"#,
         r#"|_____/|_|_|\___/ "#,
         r#"                  "#,
-        &format!("Secure Terraform State Gateway v{} ", env!("CARGO_PKG_VERSION")),
+        &format!(
+            "Secure Terraform State Gateway v{} ",
+            env!("CARGO_PKG_VERSION")
+        ),
     ];
 
     println!();
