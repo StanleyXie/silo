@@ -13,15 +13,15 @@ pub fn print_banner() {
     ];
 
     let icon = [
-        r#"       ________________       "#,
-        r#"      /       |        \      "#,
-        r#"     |________|_________|     "#,
-        r#"              |               "#,
-        r#"            __#__             "#,
-        r#"           |  #  |            "#,
-        r#"           |  #  |            "#,
-        r#"           |__#__|            "#,
-        r#"      \_______|________/      "#,
+        r#"   #######################   "#,
+        r#"   #######################   "#,
+        r#"            #####            "#,
+        r#"            #####            "#,
+        r#"            #####            "#,
+        r#"            #####            "#,
+        r#"            #####            "#,
+        r#"            #####            "#,
+        r#"            #####            "#,
     ];
 
     println!();
@@ -33,8 +33,8 @@ pub fn print_banner() {
         };
         let right = icon[i];
         
-        // Increased width for the text column to avoid overlap with the T-icon
-        println!("  {}{}", style(format!("{: <42}", left)).cyan(), style(right).cyan().bold());
+        // Ensure consistent width for text column
+        println!("  {}{}", style(format!("{: <45}", left)).cyan(), style(right).cyan().bold());
     }
     println!();
 }
