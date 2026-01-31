@@ -43,8 +43,34 @@ enum Commands {
         #[arg(long)]
         detach: bool,
     },
+    /// Management of Silo as a system service
+    Service {
+        #[command(subcommand)]
+        subcommand: ServiceCommands,
+    },
     /// Print version information
     Version,
+}
+
+#[derive(Subcommand)]
+enum ServiceCommands {
+    /// Install Silo component as a systemd service
+    Install {
+        /// Component to install (control-plane, gateway, all)
+        #[arg(long, default_value = "all")]
+        component: String,
+        /// User to run the service as
+        #[arg(long, default_value = "root")]
+        user: String,
+    },
+    /// Tail logs for a Silo component
+    Logs {
+        /// Component to tail (control-plane, gateway)
+        #[arg(long, default_value = "gateway")]
+        component: String,
+    },
+    /// Show status of Silo services
+    Status,
 }
 
 #[tokio::main]
@@ -345,6 +371,20 @@ async fn main() {
             silo::banner::print_banner();
             println!("Silo CLI v{}", env!("CARGO_PKG_VERSION"));
         }
+        Commands::Service { subcommand } => match subcommand {
+            ServiceCommands::Install { component, user } => {
+                if let Err(e) = silo::service::install_service(component, user) {
+                    println!("❌ Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            ServiceCommands::Logs { component } => {
+                silo::service::tail_logs(component);
+            }
+            ServiceCommands::Status => {
+                silo::service::show_status();
+            }
+        },
     }
 }
 

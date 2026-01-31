@@ -1,0 +1,14 @@
+[Unit]
+Description=Silo Secure Terraform State Gateway - Gateway Proxy
+After=network.target silo-control.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/etc/silo
+ExecStart=/usr/local/bin/silo-server --component gateway --config /etc/silo/silo.yaml
+Restart=always
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

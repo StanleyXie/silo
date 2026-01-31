@@ -39,6 +39,43 @@ use silo::api::ApiHandler;
 use silo::backend::etcd::EtcdBackend;
 use silo::backend::{StorageBackend, VaultClient};
 
+use clap::{Parser, ValueEnum};
+
+#[derive(Parser, Debug)]
+#[command(name = "silo-server", about = "Silo Server: Secure Terraform State Gateway")]
+struct Args {
+    /// Component to run
+    #[arg(long, value_enum, default_value_t = ServerComponent::All)]
+    component: ServerComponent,
+
+    /// Configuration file path
+    #[arg(long, env = "SILO_CONFIG")]
+    config: Option<String>,
+
+    /// Pingora daemon mode
+    #[arg(short, long)]
+    daemon: bool,
+
+    /// Pingora upgrade mode
+    #[arg(short, long)]
+    upgrade: bool,
+
+    /// Pingora test configuration mode
+    #[arg(short, long)]
+    test: bool,
+
+    /// Pingora configuration file
+    #[arg(short, long)]
+    pingora_config: Option<String>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum ServerComponent {
+    All,
+    ControlPlane,
+    Gateway,
+}
+
 fn print_banner() {
     let silo_art = r#"
    _____ _ _      
@@ -388,11 +425,20 @@ fn main() {
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
+    // 1. Parse Arguments
+    let args = Args::parse();
+    
+    // Convert to Pingora Opts
+    let mut opt = Opt::default();
+    opt.daemon = args.daemon;
+    opt.upgrade = args.upgrade;
+    opt.test = args.test;
+    opt.conf = args.pingora_config;
+
     // 2. Load Configuration
     pb.set_message(format!("{}Loading configuration...", LOOKING_GLASS));
-    let opt = Opt::parse_args();
 
-    let config_path = env::var("SILO_CONFIG").unwrap_or_else(|_| {
+    let config_path = args.config.clone().unwrap_or_else(|| {
         let paths = vec![
             "silo.yaml",
             "/etc/silo/silo.yaml",
@@ -412,6 +458,9 @@ fn main() {
         std::process::exit(1);
     });
     pb.set_message(format!("{}Configured from {}", LOOKING_GLASS, config_path));
+
+    let run_cp = matches!(args.component, ServerComponent::All | ServerComponent::ControlPlane);
+    let run_gw = matches!(args.component, ServerComponent::All | ServerComponent::Gateway);
 
     // 3. Ensure certificates exist
     pb.set_message(format!("{}Resolving certificates...", KEY));
@@ -500,262 +549,276 @@ fn main() {
         }
     };
 
-    // 3. Start gRPC Controller Service (mTLS)
-    let cp_storage = storage.clone();
-    let cp_addr: std::net::SocketAddr = silo_cfg
-        .control_plane
-        .address
-        .parse()
-        .expect("Invalid control plane address");
-    let cp_tls_cfg = silo_cfg.control_plane.tls.clone();
+    if run_cp {
+        // 3. Start gRPC Controller Service (mTLS)
+        let cp_storage = storage.clone();
+        let cp_addr: std::net::SocketAddr = silo_cfg
+            .control_plane
+            .address
+            .parse()
+            .expect("Invalid control plane address");
+        let cp_tls_cfg = silo_cfg.control_plane.tls.clone();
 
-    // Synchronize policies to KV for Autonomous Data Plane
-    let cp_allowed_sync = silo_cfg.control_plane.allowed_identities.clone();
-    let sync_storage = storage.clone();
-    rt.spawn(async move {
-        for identity in cp_allowed_sync {
-            let path = format!("secret/silo/policies/allowed_identities/{}", identity);
-            let _ = sync_storage.put(&path, b"allowed", 0).await;
-        }
-        info!("Synchronized policies to Shared-State (KV)");
-    });
+        // Synchronize policies to KV for Autonomous Data Plane
+        let cp_allowed_sync = silo_cfg.control_plane.allowed_identities.clone();
+        let sync_storage = storage.clone();
+        rt.spawn(async move {
+            for identity in cp_allowed_sync {
+                let path = format!("secret/silo/policies/allowed_identities/{}", identity);
+                let _ = sync_storage.put(&path, b"allowed", 0).await;
+            }
+            info!("Synchronized policies to Shared-State (KV)");
+        });
 
-    // 2b. Start Background Lock Reaper (Reclaim orphan locks)
-    let reaper_storage = storage.clone();
-    rt.spawn(async move {
-        info!("Background Lock Reaper started (Interval: 30s)");
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        // 2b. Start Background Lock Reaper (Reclaim orphan locks)
+        let reaper_storage = storage.clone();
+        rt.spawn(async move {
+            info!("Background Lock Reaper started (Interval: 30s)");
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
-            match reaper_storage.list("secret/silo/sessions/").await {
-                Ok(keys) => {
-                    for key in keys {
-                        let path = format!("secret/silo/sessions/{}", key);
-                        if let Ok(Some(data)) = reaper_storage.get(&path).await {
-                             if let Ok(meta) = serde_json::from_slice::<api::SessionMetadata>(&data) {
-                                 if let Ok(last_heartbeat) = chrono::DateTime::parse_from_rfc3339(&meta.last_heartbeat) {
-                                     let now = chrono::Utc::now();
-                                     let diff = now.signed_duration_since(last_heartbeat.with_timezone(&chrono::Utc));
+                match reaper_storage.list("secret/silo/sessions/").await {
+                    Ok(keys) => {
+                        for key in keys {
+                            let path = format!("secret/silo/sessions/{}", key);
+                            if let Ok(Some(data)) = reaper_storage.get(&path).await {
+                                if let Ok(meta) = serde_json::from_slice::<api::SessionMetadata>(&data)
+                                {
+                                    if let Ok(last_heartbeat) =
+                                        chrono::DateTime::parse_from_rfc3339(&meta.last_heartbeat)
+                                    {
+                                        let now = chrono::Utc::now();
+                                        let diff = now.signed_duration_since(
+                                            last_heartbeat.with_timezone(&chrono::Utc),
+                                        );
 
-                                     if diff.num_minutes() > 2 { // Shorter for demo/testing
-                                         info!("[Reaper] Session {} is stale (last heartbeat: {} min ago)", meta.session_id, diff.num_minutes());
+                                        if diff.num_minutes() > 2 {
+                                            // Shorter for demo/testing
+                                            info!("[Reaper] Session {} is stale (last heartbeat: {} min ago)", meta.session_id, diff.num_minutes());
 
-                                         // Cleanup lock
-                                         if let Some(lock_path) = meta.lock_path {
-                                             let _ = reaper_storage.delete(&lock_path).await;
-                                             let session_mapping_path = format!("{}/session", lock_path);
-                                             let _ = reaper_storage.delete(&session_mapping_path).await;
-                                             info!("[Reaper] Cleaned up lock: {}", lock_path);
-                                         }
+                                            // Cleanup lock
+                                            if let Some(lock_path) = meta.lock_path {
+                                                let _ = reaper_storage.delete(&lock_path).await;
+                                                let session_mapping_path =
+                                                    format!("{}/session", lock_path);
+                                                let _ = reaper_storage.delete(&session_mapping_path)
+                                                    .await;
+                                                info!("[Reaper] Cleaned up lock: {}", lock_path);
+                                            }
 
-                                         // Delete session
-                                         let _ = reaper_storage.delete(&path).await;
-                                     }
-                                 }
-                             }
+                                            // Delete session
+                                            let _ = reaper_storage.delete(&path).await;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                },
-                Err(e) => error!("[Reaper] Failed to list sessions: {}", e),
-            }
-        }
-    });
-
-    rt.spawn(async move {
-        let cert = tokio::fs::read(&cp_tls_cfg.server_cert)
-            .await
-            .expect("server cert missing");
-        let key = tokio::fs::read(&cp_tls_cfg.server_key)
-            .await
-            .expect("server key missing");
-        let ca_cert = tokio::fs::read(&cp_tls_cfg.ca_cert)
-            .await
-            .expect("ca cert missing");
-
-        let identity = Identity::from_pem(cert, key);
-        let ca = Certificate::from_pem(ca_cert);
-
-        let tls = ServerTlsConfig::new().identity(identity).client_ca_root(ca);
-
-        let cp_allowed = silo_cfg.control_plane.allowed_identities.clone();
-        let cp_c = ControlPlane {
-            storage: cp_storage.clone(),
-            allowed_identities: cp_allowed.clone(),
-        };
-        let cp_s = ControlPlane {
-            storage: cp_storage,
-            allowed_identities: cp_allowed,
-        };
-
-        info!(
-            "Internal gRPC Control Plane starting on {} (mTLS ENFORCED)",
-            cp_addr
-        );
-
-        TonicServer::builder()
-            .tls_config(tls)
-            .expect("failed to config gRPC TLS")
-            .add_service(ControlServiceServer::new(cp_s))
-            .add_service(StorageServiceServer::new(cp_c))
-            .serve(cp_addr)
-            .await
-            .expect("gRPC server failed");
-    });
-
-    // Wait for internal gRPC and connect clients
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    let cp_tls_cfg = silo_cfg.control_plane.tls.clone();
-    let control_client = rt.block_on(async {
-        let cert = tokio::fs::read(&cp_tls_cfg.client_cert)
-            .await
-            .expect("client cert missing");
-        let key = tokio::fs::read(&cp_tls_cfg.client_key)
-            .await
-            .expect("client key missing");
-        let ca_cert = tokio::fs::read(&cp_tls_cfg.ca_cert)
-            .await
-            .expect("ca cert missing");
-
-        let identity = Identity::from_pem(cert, key);
-        let ca = Certificate::from_pem(ca_cert);
-
-        let tls = ClientTlsConfig::new()
-            .domain_name("control-plane.silo.internal")
-            .identity(identity)
-            .ca_certificate(ca);
-
-        let channel = tonic::transport::Endpoint::from_shared(format!(
-            "https://{}",
-            silo_cfg.control_plane.address
-        ))
-        .expect("Invalid channel URL")
-        .tls_config(tls)
-        .expect("failed to config client TLS")
-        .connect()
-        .await
-        .expect("failed to connect to gRPC Control Plane");
-
-        ControlServiceClient::new(channel)
-    });
-
-    let grpc_storage = rt
-        .block_on(async {
-            backend::grpc::GrpcStorageClient::new_mtls(
-                &format!("https://{}", silo_cfg.control_plane.address),
-                &silo_cfg.control_plane.tls.client_cert,
-                &silo_cfg.control_plane.tls.client_key,
-                &silo_cfg.control_plane.tls.ca_cert,
-            )
-            .await
-        })
-        .expect("Failed to connect to internal gRPC Storage");
-
-    let native_auth = auth::NativeIdentityService::new(silo_cfg.auth.native.clone());
-    let handler = ApiHandler::new(
-        Arc::new(grpc_storage),
-        control_client,
-        native_auth,
-        certs_dir,
-    );
-    let req_metric = prometheus::register_int_counter!("req_counter", "Number of requests")
-        .expect("Failed to register metric");
-
-    // Initialize OIDC authenticator if enabled
-    let oidc_auth = if silo_cfg.auth.oidc.enabled {
-        info!(
-            "OIDC authentication enabled (issuer: {})",
-            silo_cfg.auth.oidc.issuer
-        );
-        Some(Arc::new(auth::OidcAuthenticator::new(
-            silo_cfg.auth.oidc.issuer.clone(),
-            silo_cfg.auth.oidc.jwks_uri.clone(),
-            silo_cfg.auth.oidc.audience.clone(),
-        )))
-    } else {
-        None
-    };
-
-    // 4. Create Proxy Service
-    let mut lb = pingora_proxy::http_proxy_service(
-        &server.configuration,
-        Gateway {
-            handler,
-            req_metric,
-            oidc_auth,
-            backend_addr: silo_cfg
-                .storage
-                .vault
-                .map(|v| v.address)
-                .unwrap_or_else(|| "127.0.0.1:8200".to_string()),
-        },
-    );
-
-    // Configure TLS Listener
-    if silo_cfg.gateway.tls.enabled {
-        let cert_path = &silo_cfg.gateway.tls.cert_path;
-        let key_path = &silo_cfg.gateway.tls.key_path;
-
-        if std::path::Path::new(cert_path).exists() {
-            // Use callbacks for identity extraction
-            let callbacks = Box::new(GatewayTlsCallbacks);
-            let mut tls_settings =
-                pingora_core::listeners::tls::TlsSettings::with_callbacks(callbacks)
-                    .expect("Failed to load TLS settings");
-
-            tls_settings
-                .set_certificate_chain_file(cert_path)
-                .expect("Failed to load cert chain");
-            tls_settings
-                .set_private_key_file(key_path, pingora_openssl::ssl::SslFiletype::PEM)
-                .expect("Failed to load private key");
-
-            // Enable Client Certificate Verification if CA is provided
-            if let Some(ca_path) = &silo_cfg.control_plane.tls.ca_cert.clone().into() {
-                let ca_path: &String = ca_path; // type hint
-                if std::path::Path::new(ca_path).exists() {
-                    info!(
-                        "mTLS enabled: Verifying client certificates against {}",
-                        ca_path
-                    );
-                    // We use the same internal CA for simplicity in this demo,
-                    // but in prod this might be a dedicated client CA.
-                    tls_settings.set_verify(SslVerifyMode::PEER);
-                    tls_settings
-                        .set_ca_file(ca_path)
-                        .expect("Failed to load client CA");
+                    Err(e) => error!("[Reaper] Failed to list sessions: {}", e),
                 }
             }
+        });
 
-            tls_settings.enable_h2();
-            lb.add_tls_with_settings(&silo_cfg.gateway.address, None, tls_settings);
+        rt.spawn(async move {
+            let cert = tokio::fs::read(&cp_tls_cfg.server_cert)
+                .await
+                .expect("server cert missing");
+            let key = tokio::fs::read(&cp_tls_cfg.server_key)
+                .await
+                .expect("server key missing");
+            let ca_cert = tokio::fs::read(&cp_tls_cfg.ca_cert)
+                .await
+                .expect("ca cert missing");
 
-            pb.set_message(format!(
-                "{}Gateway initialized for HTTPS {}",
-                ROCKET, silo_cfg.gateway.address
-            ));
-        } else {
-            error!(
-                "TLS certificates not found at {}, starting without TLS",
-                cert_path
+            let identity = Identity::from_pem(cert, key);
+            let ca = Certificate::from_pem(ca_cert);
+
+            let tls = ServerTlsConfig::new().identity(identity).client_ca_root(ca);
+
+            let cp_allowed = silo_cfg.control_plane.allowed_identities.clone();
+            let cp_c = ControlPlane {
+                storage: cp_storage.clone(),
+                allowed_identities: cp_allowed.clone(),
+            };
+            let cp_s = ControlPlane {
+                storage: cp_storage,
+                allowed_identities: cp_allowed,
+            };
+
+            info!(
+                "Internal gRPC Control Plane starting on {} (mTLS ENFORCED)",
+                cp_addr
             );
+
+            TonicServer::builder()
+                .tls_config(tls)
+                .expect("failed to config gRPC TLS")
+                .add_service(ControlServiceServer::new(cp_s))
+                .add_service(StorageServiceServer::new(cp_c))
+                .serve(cp_addr)
+                .await
+                .expect("gRPC server failed");
+        });
+    }
+
+    if run_gw {
+        // Wait for internal gRPC and connect clients
+        if run_cp {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+
+        let cp_tls_cfg = silo_cfg.control_plane.tls.clone();
+        let control_client = rt.block_on(async {
+            let cert = tokio::fs::read(&cp_tls_cfg.client_cert)
+                .await
+                .expect("client cert missing");
+            let key = tokio::fs::read(&cp_tls_cfg.client_key)
+                .await
+                .expect("client key missing");
+            let ca_cert = tokio::fs::read(&cp_tls_cfg.ca_cert)
+                .await
+                .expect("ca cert missing");
+
+            let identity = Identity::from_pem(cert, key);
+            let ca = Certificate::from_pem(ca_cert);
+
+            let tls = ClientTlsConfig::new()
+                .domain_name("control-plane.silo.internal")
+                .identity(identity)
+                .ca_certificate(ca);
+
+            let channel = tonic::transport::Endpoint::from_shared(format!(
+                "https://{}",
+                silo_cfg.control_plane.address
+            ))
+            .expect("Invalid channel URL")
+            .tls_config(tls)
+            .expect("failed to config client TLS")
+            .connect()
+            .await
+            .expect("failed to connect to gRPC Control Plane");
+
+            ControlServiceClient::new(channel)
+        });
+
+        let grpc_storage = rt
+            .block_on(async {
+                backend::grpc::GrpcStorageClient::new_mtls(
+                    &format!("https://{}", silo_cfg.control_plane.address),
+                    &silo_cfg.control_plane.tls.client_cert,
+                    &silo_cfg.control_plane.tls.client_key,
+                    &silo_cfg.control_plane.tls.ca_cert,
+                )
+                .await
+            })
+            .expect("Failed to connect to internal gRPC Storage");
+
+        let native_auth = auth::NativeIdentityService::new(silo_cfg.auth.native.clone());
+        let handler = ApiHandler::new(
+            Arc::new(grpc_storage),
+            control_client,
+            native_auth,
+            certs_dir,
+        );
+        let req_metric = prometheus::register_int_counter!("req_counter", "Number of requests")
+            .expect("Failed to register metric");
+
+        // Initialize OIDC authenticator if enabled
+        let oidc_auth = if silo_cfg.auth.oidc.enabled {
+            info!(
+                "OIDC authentication enabled (issuer: {})",
+                silo_cfg.auth.oidc.issuer
+            );
+            Some(Arc::new(auth::OidcAuthenticator::new(
+                silo_cfg.auth.oidc.issuer.clone(),
+                silo_cfg.auth.oidc.jwks_uri.clone(),
+                silo_cfg.auth.oidc.audience.clone(),
+            )))
+        } else {
+            None
+        };
+
+        // 4. Create Proxy Service
+        let mut lb = pingora_proxy::http_proxy_service(
+            &server.configuration,
+            Gateway {
+                handler,
+                req_metric,
+                oidc_auth,
+                backend_addr: silo_cfg
+                    .storage
+                    .vault
+                    .map(|v| v.address)
+                    .unwrap_or_else(|| "127.0.0.1:8200".to_string()),
+            },
+        );
+
+        // Configure TLS Listener
+        if silo_cfg.gateway.tls.enabled {
+            let cert_path = &silo_cfg.gateway.tls.cert_path;
+            let key_path = &silo_cfg.gateway.tls.key_path;
+
+            if std::path::Path::new(cert_path).exists() {
+                // Use callbacks for identity extraction
+                let callbacks = Box::new(GatewayTlsCallbacks);
+                let mut tls_settings =
+                    pingora_core::listeners::tls::TlsSettings::with_callbacks(callbacks)
+                        .expect("Failed to load TLS settings");
+
+                tls_settings
+                    .set_certificate_chain_file(cert_path)
+                    .expect("Failed to load cert chain");
+                tls_settings
+                    .set_private_key_file(key_path, pingora_openssl::ssl::SslFiletype::PEM)
+                    .expect("Failed to load private key");
+
+                // Enable Client Certificate Verification if CA is provided
+                if let Some(ca_path) = &silo_cfg.control_plane.tls.ca_cert.clone().into() {
+                    let ca_path: &String = ca_path; // type hint
+                    if std::path::Path::new(ca_path).exists() {
+                        info!(
+                            "mTLS enabled: Verifying client certificates against {}",
+                            ca_path
+                        );
+                        // We use the same internal CA for simplicity in this demo,
+                        // but in prod this might be a dedicated client CA.
+                        tls_settings.set_verify(SslVerifyMode::PEER);
+                        tls_settings
+                            .set_ca_file(ca_path)
+                            .expect("Failed to load client CA");
+                    }
+                }
+
+                tls_settings.enable_h2();
+                lb.add_tls_with_settings(&silo_cfg.gateway.address, None, tls_settings);
+
+                pb.set_message(format!(
+                    "{}Gateway initialized for HTTPS {}",
+                    ROCKET, silo_cfg.gateway.address
+                ));
+            } else {
+                error!(
+                    "TLS certificates not found at {}, starting without TLS",
+                    cert_path
+                );
+                lb.add_tcp(&silo_cfg.gateway.address);
+                pb.set_message(format!(
+                    "{}Gateway initialized for HTTP {}",
+                    ROCKET, silo_cfg.gateway.address
+                ));
+            }
+        } else {
             lb.add_tcp(&silo_cfg.gateway.address);
             pb.set_message(format!(
                 "{}Gateway initialized for HTTP {}",
                 ROCKET, silo_cfg.gateway.address
             ));
         }
-    } else {
-        lb.add_tcp(&silo_cfg.gateway.address);
-        pb.set_message(format!(
-            "{}Gateway initialized for HTTP {}",
-            ROCKET, silo_cfg.gateway.address
-        ));
+
+        server.add_service(lb);
     }
 
-    server.add_service(lb);
-
-    // 5. Prometheus Metrics Service
+    // 5. Prometheus Metrics Service (Always start to allow Pingora to manage process)
     let mut prometheus_service_http =
         pingora_core::services::listening::Service::prometheus_http_service();
     prometheus_service_http.add_tcp(&silo_cfg.gateway.metrics_address);
