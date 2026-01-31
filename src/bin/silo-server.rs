@@ -42,7 +42,10 @@ use silo::backend::{StorageBackend, VaultClient};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
-#[command(name = "silo-server", about = "Silo Server: Secure Terraform State Gateway")]
+#[command(
+    name = "silo-server",
+    about = "Silo Server: Secure Terraform State Gateway"
+)]
 struct Args {
     /// Component to run
     #[arg(long, value_enum, default_value_t = ServerComponent::All)]
@@ -424,7 +427,8 @@ fn main() {
     let signal_tx = shutdown_tx.clone();
     rt.spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
         let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
 
         tokio::select! {
@@ -445,7 +449,7 @@ fn main() {
 
     // 1. Parse Arguments
     let args = Args::parse();
-    
+
     // Convert to Pingora Opts
     let mut opt = Opt::default();
     opt.daemon = args.daemon;
@@ -477,8 +481,14 @@ fn main() {
     });
     pb.set_message(format!("{}Configured from {}", LOOKING_GLASS, config_path));
 
-    let run_cp = matches!(args.component, ServerComponent::All | ServerComponent::ControlPlane);
-    let run_gw = matches!(args.component, ServerComponent::All | ServerComponent::Gateway);
+    let run_cp = matches!(
+        args.component,
+        ServerComponent::All | ServerComponent::ControlPlane
+    );
+    let run_gw = matches!(
+        args.component,
+        ServerComponent::All | ServerComponent::Gateway
+    );
 
     // 3. Ensure certificates exist
     pb.set_message(format!("{}Resolving certificates...", KEY));
@@ -685,7 +695,10 @@ fn main() {
                 })
                 .await
                 .map_err(|e| {
-                    error!("gRPC server failed: {}. Is port {} already in use?", e, cp_addr);
+                    error!(
+                        "gRPC server failed: {}. Is port {} already in use?",
+                        e, cp_addr
+                    );
                 })
                 .ok();
         });

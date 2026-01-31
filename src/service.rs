@@ -21,7 +21,7 @@ pub fn install_service(component: &str, user: &str) -> Result<(), String> {
     };
 
     let unit_content = format!(
-r#"[Unit]
+        r#"[Unit]
 Description=Silo Secure Terraform State Gateway - {component}
 After=network.target vault.service
 
@@ -43,15 +43,18 @@ WantedBy=multi-user.target
     );
 
     let unit_path = format!("/etc/systemd/system/{}.service", service_name);
-    
+
     println!("📝 Generating service unit at {}...", unit_path);
-    
+
     // In a real implementation, we'd need sudo to write to /etc/systemd/system/
     // For this CLI tool, we'll suggest the command if we fail to write directly.
     match fs::write(&unit_path, &unit_content) {
         Ok(_) => {
             println!("✅ Service unit installed.");
-            println!("🚀 Run 'systemctl daemon-reload' and 'systemctl enable --now {}' to start.", service_name);
+            println!(
+                "🚀 Run 'systemctl daemon-reload' and 'systemctl enable --now {}' to start.",
+                service_name
+            );
             Ok(())
         }
         Err(e) => {
@@ -71,11 +74,8 @@ pub fn show_status() {
     println!("{}", "-".repeat(45));
 
     for svc in services {
-        let output = Command::new("systemctl")
-            .arg("is-active")
-            .arg(svc)
-            .output();
-        
+        let output = Command::new("systemctl").arg("is-active").arg(svc).output();
+
         let status = match output {
             Ok(out) => {
                 if out.status.success() {
@@ -83,10 +83,10 @@ pub fn show_status() {
                 } else {
                     "INACTIVE"
                 }
-            },
+            }
             Err(_) => "UNKNOWN (systemd not found)",
         };
-        
+
         let desc = match svc {
             "silo" => "All-in-one Silo",
             "silo-control" => "Control Plane Only",
@@ -106,7 +106,10 @@ pub fn tail_logs(component: &str) {
         _ => component,
     };
 
-    println!("📋 Tailing logs for service: {} (Ctrl+C to stop)", service_name);
+    println!(
+        "📋 Tailing logs for service: {} (Ctrl+C to stop)",
+        service_name
+    );
     let _ = Command::new("journalctl")
         .arg("-u")
         .arg(service_name)
@@ -124,17 +127,18 @@ fn find_binary(name: &str) -> Result<String, String> {
             return Ok(full);
         }
     }
-    
+
     // Try which command
-    let output = Command::new("which")
-        .arg(name)
-        .output();
-    
+    let output = Command::new("which").arg(name).output();
+
     if let Ok(out) = output {
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
         }
     }
 
-    Err(format!("Binary '{}' not found in PATH or common locations. Please install it first.", name))
+    Err(format!(
+        "Binary '{}' not found in PATH or common locations. Please install it first.",
+        name
+    ))
 }

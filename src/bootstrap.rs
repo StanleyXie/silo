@@ -189,18 +189,30 @@ impl BootstrapManager {
     fn kill_process(pid: u32) {
         #[cfg(unix)]
         {
-            let _ = Command::new("kill").arg("-SIGTERM").arg(pid.to_string()).status();
+            let _ = Command::new("kill")
+                .arg("-SIGTERM")
+                .arg(pid.to_string())
+                .status();
         }
         #[cfg(windows)]
         {
-            let _ = Command::new("taskkill").arg("/F").arg("/PID").arg(pid.to_string()).status();
+            let _ = Command::new("taskkill")
+                .arg("/F")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .status();
         }
     }
 
     pub fn get_process_status(&self, _name: &str, pid_file: &str) -> (String, String) {
         if let Some(pid) = self.read_pid(pid_file) {
             // Check if process is actually running
-            let running = match Command::new("kill").arg("-0").arg(pid.to_string()).status() {
+            let running = match Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stderr(Stdio::null())
+                .status()
+            {
                 Ok(s) => s.success(),
                 Err(_) => false,
             };

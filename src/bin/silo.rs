@@ -156,11 +156,17 @@ async fn main() {
 
             let (v_status, v_pid) = manager.get_process_status("Vault", "vault.pid");
             let v_icon = if v_status == "RUNNING" { "✅" } else { "❌" };
-            println!("   {} Vault:       {:<10} (PID: {})", v_icon, v_status, v_pid);
+            println!(
+                "   {} Vault:       {:<10} (PID: {})",
+                v_icon, v_status, v_pid
+            );
 
             let (s_status, s_pid) = manager.get_process_status("Silo", "silo.pid");
             let s_icon = if s_status == "RUNNING" { "✅" } else { "❌" };
-            println!("   {} Silo Server: {:<10} (PID: {})", s_icon, s_status, s_pid);
+            println!(
+                "   {} Silo Server: {:<10} (PID: {})",
+                s_icon, s_status, s_pid
+            );
 
             println!("\n⚙️ Systemd Services:");
             silo::service::show_status();
@@ -399,7 +405,10 @@ async fn main() {
             eprintln!("❌ Failed to exec command: {}", error);
             std::process::exit(1);
         }
-        Commands::Init { non_interactive, service } => {
+        Commands::Init {
+            non_interactive,
+            service,
+        } => {
             handle_init(*non_interactive, *service).await;
         }
         Commands::Up { detach } => {
@@ -481,11 +490,13 @@ async fn handle_init(non_interactive: bool, service: bool) {
     }
 
     // 4. Systemd Service Integration (Optional/Converged)
-    if service || (!non_interactive && Confirm::new()
-        .with_prompt("Do you want to install Silo as a systemd service? (Linux only)")
-        .default(false)
-        .interact()
-        .unwrap_or(false)) 
+    if service
+        || (!non_interactive
+            && Confirm::new()
+                .with_prompt("Do you want to install Silo as a systemd service? (Linux only)")
+                .default(false)
+                .interact()
+                .unwrap_or(false))
     {
         println!("📝 Initiating systemd service installation...");
         if let Err(e) = silo::service::install_service("all", "root") {
