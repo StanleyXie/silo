@@ -3,7 +3,7 @@ FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /app
 
-COPY artifacts/silo /usr/local/bin/silo
+COPY silo /usr/local/bin/silo
 
 # Default config location
 COPY silo.yaml /app/silo.yaml
