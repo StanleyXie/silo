@@ -95,6 +95,9 @@ impl BootstrapManager {
             .stderr(Stdio::null())
             .spawn()?;
 
+        let pid = child.id();
+        self.write_pid("vault.pid", pid)?;
+
         // Wait for Vault to be ready
         let client = reqwest::Client::new();
         for _ in 0..10 {
@@ -140,6 +143,75 @@ impl BootstrapManager {
         }
 
         let child = cmd.spawn()?;
+        self.write_pid("silo.pid", child.id())?;
         Ok(child)
+    }
+
+    fn write_pid(&self, filename: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        let silo_dir = home.join(".silo");
+        fs::create_dir_all(&silo_dir)?;
+        fs::write(silo_dir.join(filename), pid.to_string())?;
+        Ok(())
+    }
+
+    pub fn read_pid(&self, filename: &str) -> Option<u32> {
+        let home = dirs::home_dir()?;
+        let silo_dir = home.join(".silo");
+        let pid_str = fs::read_to_string(silo_dir.join(filename)).ok()?;
+        pid_str.trim().parse::<u32>().ok()
+    }
+
+    pub fn cleanup_pid(&self, filename: &str) {
+        if let Some(home) = dirs::home_dir() {
+            let _ = fs::remove_file(home.join(".silo").join(filename));
+        }
+    }
+
+    pub fn stop_environment(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // 1. Stop Silo
+        if let Some(pid) = self.read_pid("silo.pid") {
+            println!("🛑 Stopping Silo Server (PID: {})...", pid);
+            Self::kill_process(pid);
+            self.cleanup_pid("silo.pid");
+        }
+
+        // 2. Stop Vault
+        if let Some(pid) = self.read_pid("vault.pid") {
+            println!("🛑 Stopping Vault (PID: {})...", pid);
+            Self::kill_process(pid);
+            self.cleanup_pid("vault.pid");
+        }
+
+        Ok(())
+    }
+
+    fn kill_process(pid: u32) {
+        #[cfg(unix)]
+        {
+            let _ = Command::new("kill").arg("-SIGTERM").arg(pid.to_string()).status();
+        }
+        #[cfg(windows)]
+        {
+            let _ = Command::new("taskkill").arg("/F").arg("/PID").arg(pid.to_string()).status();
+        }
+    }
+
+    pub fn get_process_status(&self, _name: &str, pid_file: &str) -> (String, String) {
+        if let Some(pid) = self.read_pid(pid_file) {
+            // Check if process is actually running
+            let running = match Command::new("kill").arg("-0").arg(pid.to_string()).status() {
+                Ok(s) => s.success(),
+                Err(_) => false,
+            };
+
+            if running {
+                ("RUNNING".to_string(), pid.to_string())
+            } else {
+                ("STOPPED".to_string(), "-".to_string())
+            }
+        } else {
+            ("NOT FOUND".to_string(), "-".to_string())
+        }
     }
 }

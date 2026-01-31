@@ -33,16 +33,26 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Initialize Silo configuration and environment
+    /// Initialize Silo setup (Configuration & Certificates)
     Init {
+        /// Do not prompt for confirmation
         #[arg(long)]
         non_interactive: bool,
-    },
-    /// Start all Silo components (Storage, Control Plane, Gateway)
-    Up {
+
+        /// Automatically install as a system service (Linux)
         #[arg(long)]
+        service: bool,
+    },
+    /// Start the Silo environment
+    Up {
+        /// Run in background (detach)
+        #[arg(short, long)]
         detach: bool,
     },
+    /// Stop the Silo environment
+    Stop,
+    /// Stop and cleanup the Silo environment
+    Down,
     /// Management of Silo as a system service
     Service {
         #[command(subcommand)]
@@ -79,6 +89,19 @@ async fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
+        Commands::Stop => {
+            let manager = BootstrapManager::new("silo.yaml");
+            if let Err(e) = manager.stop_environment() {
+                println!("❌ Error stopping environment: {}", e);
+            }
+        }
+        Commands::Down => {
+            let manager = BootstrapManager::new("silo.yaml");
+            if let Err(e) = manager.stop_environment() {
+                println!("❌ Error stopping environment: {}", e);
+            }
+            // Additional cleanup could go here
+        }
         Commands::SelfTest => {
             println!("✅ Silo CLI Core is operational.");
         }
@@ -122,13 +145,28 @@ async fn main() {
                         }
                     }
                 }
-                Err(e) => {
-                    println!("   ❌ Server is UNREACHABLE at {}: {}", url, e);
-                    println!("      (Is the Silo Gateway running?)");
+                Err(_) => {
+                    println!("   ❌ Server is UNREACHABLE at {}", endpoint);
                 }
             }
 
-            // 2. Check Client Context
+            // 2. Check Local Process Status
+            println!("\n💻 Local Process Management:");
+            let manager = BootstrapManager::new("silo.yaml");
+
+            let (v_status, v_pid) = manager.get_process_status("Vault", "vault.pid");
+            let v_icon = if v_status == "RUNNING" { "✅" } else { "❌" };
+            println!("   {} Vault:       {:<10} (PID: {})", v_icon, v_status, v_pid);
+
+            let (s_status, s_pid) = manager.get_process_status("Silo", "silo.pid");
+            let s_icon = if s_status == "RUNNING" { "✅" } else { "❌" };
+            println!("   {} Silo Server: {:<10} (PID: {})", s_icon, s_status, s_pid);
+
+            println!("\n⚙️ Systemd Services:");
+            silo::service::show_status();
+
+            // 3. Check Client Context
+            println!("\n🔑 Client Context:");
             let cert_dir = dirs::home_dir().unwrap().join(".silo/certs");
             if cert_dir.exists() {
                 println!("   ✅ Client Context Found: {:?}", cert_dir);
@@ -361,8 +399,8 @@ async fn main() {
             eprintln!("❌ Failed to exec command: {}", error);
             std::process::exit(1);
         }
-        Commands::Init { non_interactive } => {
-            handle_init(*non_interactive).await;
+        Commands::Init { non_interactive, service } => {
+            handle_init(*non_interactive, *service).await;
         }
         Commands::Up { detach } => {
             handle_up(*detach).await;
@@ -388,7 +426,7 @@ async fn main() {
     }
 }
 
-async fn handle_init(non_interactive: bool) {
+async fn handle_init(non_interactive: bool, service: bool) {
     silo::banner::print_banner();
     println!("🚀 Initializing Silo Setup...");
     let manager = BootstrapManager::new("silo.yaml");
@@ -440,6 +478,20 @@ async fn handle_init(non_interactive: bool) {
     match silo::certs::generate_certs(&certs_dir) {
         Ok(_) => println!("✅ Certificates generated in {:?}", certs_dir),
         Err(e) => println!("❌ Certificate generation failed: {}", e),
+    }
+
+    // 4. Systemd Service Integration (Optional/Converged)
+    if service || (!non_interactive && Confirm::new()
+        .with_prompt("Do you want to install Silo as a systemd service? (Linux only)")
+        .default(false)
+        .interact()
+        .unwrap_or(false)) 
+    {
+        println!("📝 Initiating systemd service installation...");
+        if let Err(e) = silo::service::install_service("all", "root") {
+            println!("   ⚠️  Service installation skipped: {}", e);
+            println!("   (This is normal on non-Linux systems or if not running as root)");
+        }
     }
 
     println!("\n✨ Initialization complete! Run 'silo up' to start the environment.");

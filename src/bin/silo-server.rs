@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use log::{error, info};
+use log::{error, info, warn};
 use std::env;
 use std::sync::Arc;
 
@@ -401,8 +401,8 @@ impl ProxyHttp for Gateway {
 
 fn main() {
     // 1. Manually handle CLI flags that shouldn't trigger full startup
-    let args: Vec<String> = env::args().collect();
-    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+    let args_env: Vec<String> = env::args().collect();
+    if args_env.contains(&"--version".to_string()) || args_env.contains(&"-v".to_string()) {
         println!("silo {}", env!("CARGO_PKG_VERSION"));
         return;
     }
@@ -415,6 +415,24 @@ fn main() {
         env::set_var("RUST_LOG", "info");
     }
     env_logger::init();
+
+    // 2. Setup Shutdown Coordination
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Signal handler
+    let signal_tx = shutdown_tx.clone();
+    rt.spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM, shutting down gracefully..."),
+            _ = sigint.recv() => info!("Received SIGINT, shutting down gracefully..."),
+        };
+        let _ = signal_tx.send(());
+    });
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -511,9 +529,6 @@ fn main() {
     let mut server = Server::new(Some(opt)).expect("Failed to initialize server");
     server.bootstrap();
 
-    // We need a runtime for async backend connections
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-
     // 2. Initialize Backend
     let storage: Arc<dyn StorageBackend> = match silo_cfg.storage.storage_type.as_str() {
         #[cfg(feature = "etcd")]
@@ -572,54 +587,63 @@ fn main() {
 
         // 2b. Start Background Lock Reaper (Reclaim orphan locks)
         let reaper_storage = storage.clone();
+        let mut reaper_shutdown = shutdown_tx.subscribe();
         rt.spawn(async move {
             info!("Background Lock Reaper started (Interval: 30s)");
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                        match reaper_storage.list("secret/silo/sessions/").await {
+                            Ok(keys) => {
+                                for key in keys {
+                                    let path = format!("secret/silo/sessions/{}", key);
+                                    if let Ok(Some(data)) = reaper_storage.get(&path).await {
+                                        if let Ok(meta) = serde_json::from_slice::<api::SessionMetadata>(&data)
+                                        {
+                                            if let Ok(last_heartbeat) =
+                                                chrono::DateTime::parse_from_rfc3339(&meta.last_heartbeat)
+                                            {
+                                                let now = chrono::Utc::now();
+                                                let diff = now.signed_duration_since(
+                                                    last_heartbeat.with_timezone(&chrono::Utc),
+                                                );
 
-                match reaper_storage.list("secret/silo/sessions/").await {
-                    Ok(keys) => {
-                        for key in keys {
-                            let path = format!("secret/silo/sessions/{}", key);
-                            if let Ok(Some(data)) = reaper_storage.get(&path).await {
-                                if let Ok(meta) = serde_json::from_slice::<api::SessionMetadata>(&data)
-                                {
-                                    if let Ok(last_heartbeat) =
-                                        chrono::DateTime::parse_from_rfc3339(&meta.last_heartbeat)
-                                    {
-                                        let now = chrono::Utc::now();
-                                        let diff = now.signed_duration_since(
-                                            last_heartbeat.with_timezone(&chrono::Utc),
-                                        );
+                                                if diff.num_minutes() > 2 {
+                                                    // Shorter for demo/testing
+                                                    info!("[Reaper] Session {} is stale (last heartbeat: {} min ago)", meta.session_id, diff.num_minutes());
 
-                                        if diff.num_minutes() > 2 {
-                                            // Shorter for demo/testing
-                                            info!("[Reaper] Session {} is stale (last heartbeat: {} min ago)", meta.session_id, diff.num_minutes());
+                                                    // Cleanup lock
+                                                    if let Some(lock_path) = meta.lock_path {
+                                                        let _ = reaper_storage.delete(&lock_path).await;
+                                                        let session_mapping_path =
+                                                            format!("{}/session", lock_path);
+                                                        let _ = reaper_storage.delete(&session_mapping_path)
+                                                            .await;
+                                                        info!("[Reaper] Cleaned up lock: {}", lock_path);
+                                                    }
 
-                                            // Cleanup lock
-                                            if let Some(lock_path) = meta.lock_path {
-                                                let _ = reaper_storage.delete(&lock_path).await;
-                                                let session_mapping_path =
-                                                    format!("{}/session", lock_path);
-                                                let _ = reaper_storage.delete(&session_mapping_path)
-                                                    .await;
-                                                info!("[Reaper] Cleaned up lock: {}", lock_path);
+                                                    // Delete session
+                                                    let _ = reaper_storage.delete(&path).await;
+                                                }
                                             }
-
-                                            // Delete session
-                                            let _ = reaper_storage.delete(&path).await;
                                         }
                                     }
                                 }
                             }
+                            Err(e) => error!("[Reaper] Failed to list sessions: {}", e),
                         }
                     }
-                    Err(e) => error!("[Reaper] Failed to list sessions: {}", e),
+                    _ = reaper_shutdown.recv() => {
+                        info!("Background Lock Reaper shutting down...");
+                        break;
+                    }
                 }
             }
         });
 
+        let cp_shutdown_tx = shutdown_tx.clone();
         rt.spawn(async move {
+            let mut cp_shutdown = cp_shutdown_tx.subscribe();
             let cert = tokio::fs::read(&cp_tls_cfg.server_cert)
                 .await
                 .expect("server cert missing");
@@ -655,9 +679,15 @@ fn main() {
                 .expect("failed to config gRPC TLS")
                 .add_service(ControlServiceServer::new(cp_s))
                 .add_service(StorageServiceServer::new(cp_c))
-                .serve(cp_addr)
+                .serve_with_shutdown(cp_addr, async move {
+                    let _ = cp_shutdown.recv().await;
+                    info!("gRPC Control Plane received shutdown signal");
+                })
                 .await
-                .expect("gRPC server failed");
+                .map_err(|e| {
+                    error!("gRPC server failed: {}. Is port {} already in use?", e, cp_addr);
+                })
+                .ok();
         });
     }
 
@@ -687,18 +717,36 @@ fn main() {
                 .identity(identity)
                 .ca_certificate(ca);
 
-            let channel = tonic::transport::Endpoint::from_shared(format!(
+            let endpoint = tonic::transport::Endpoint::from_shared(format!(
                 "https://{}",
                 silo_cfg.control_plane.address
             ))
             .expect("Invalid channel URL")
             .tls_config(tls)
-            .expect("failed to config client TLS")
-            .connect()
-            .await
-            .expect("failed to connect to gRPC Control Plane");
+            .expect("failed to config client TLS");
 
-            ControlServiceClient::new(channel)
+            // Retry connection loop
+            let mut retry_count = 0;
+            loop {
+                match endpoint.connect().await {
+                    Ok(channel) => return ControlServiceClient::new(channel),
+                    Err(e) => {
+                        retry_count += 1;
+                        if retry_count > 5 {
+                            error!("FATAL: Failed to connect to gRPC Control Plane after 5 attempts: {}", e);
+                            if e.to_string().contains("BadSignature") {
+                                error!("HINT: This usually means certificates are out of sync. Try running 'silo init' to regenerate them.");
+                            }
+                            if e.to_string().contains("Connection refused") {
+                                error!("HINT: Is the Control Plane port {} already in use by another process?", silo_cfg.control_plane.address);
+                            }
+                            std::process::exit(1);
+                        }
+                        warn!("Waiting for Control Plane to be ready (attempt {}/5)...", retry_count);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
         });
 
         let grpc_storage = rt
@@ -840,5 +888,19 @@ fn main() {
             .green()
     );
 
-    server.run_forever();
+    // 6. Block on Pingora and coordinated shutdown
+    rt.block_on(async {
+        // Run Pingora in a separate task so we can monitor our shutdown signal
+        std::thread::spawn(move || {
+            server.run_forever();
+        });
+
+        // Wait for our coordinated shutdown signal
+        let _ = shutdown_rx.recv().await;
+        info!("Graceful shutdown initiated. Waiting for cleanup...");
+
+        // Give components a bit of time to drain
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        info!("Silo Service shutdown complete.");
+    });
 }
