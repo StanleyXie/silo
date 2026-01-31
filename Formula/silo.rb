@@ -4,7 +4,7 @@
 class Silo < Formula
   desc "Secure Terraform State Gateway with mTLS, OIDC, and governance controls"
   homepage "https://github.com/StanleyXie/silo"
-  version "0.3.19"
+  version "0.3.20"
   license "MIT"
 
   on_macos do
