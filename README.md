@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/images/logo_horizontal.png" alt="Silo Logo" width="600">
+  <img src="docs/images/logo_horizontal.png" alt="Silo Logo" width="800">
 </div>
 
 # Silo: Secure Terraform State Gateway
