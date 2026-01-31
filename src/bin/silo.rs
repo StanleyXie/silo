@@ -43,6 +43,8 @@ enum Commands {
         #[arg(long)]
         detach: bool,
     },
+    /// Print version information
+    Version,
 }
 
 #[tokio::main]
@@ -338,6 +340,9 @@ async fn main() {
         }
         Commands::Up { detach } => {
             handle_up(*detach).await;
+        }
+        Commands::Version => {
+            println!("Silo CLI v{}", env!("CARGO_PKG_VERSION"));
         }
     }
 }

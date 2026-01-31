@@ -21,6 +21,7 @@ pub fn print_banner() {
         " (____/ (__) (___)  \\____/ ",
         " ",
         "  SECURE TERRAFORM GATEWAY ",
+        &format!("  v{} ", env!("CARGO_PKG_VERSION")),
     ];
 
     println!();
