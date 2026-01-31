@@ -126,12 +126,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      new_tag: ${{ steps.next_version.outputs.new_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get next version
         id: next_version
@@ -148,10 +150,7 @@ jobs:
           NEW_VER=${NEW_TAG#v}
           echo "Updating files to version $NEW_VER"
           
-          # Update Cargo.toml
           python3 -c "import re; v='$NEW_VER'; c=open('Cargo.toml').read(); c=re.sub(r'^version = \".*?\"', f'version = \"{v}\"', c, count=1, flags=re.M); open('Cargo.toml', 'w').write(c)"
-          
-          # Update Formula/silo.rb
           python3 -c "import re; v='$NEW_VER'; c=open('Formula/silo.rb').read(); c=re.sub(r'version \".*?\"', f'version \"{v}\"', c, count=1); open('Formula/silo.rb', 'w').write(c)"
           
           git config user.name "github-actions[bot]"
@@ -160,25 +159,32 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "chore: bump version to $NEW_TAG [skip ci]"
             git push origin main
-          else
-            echo "No changes to commit"
           fi
 
       - name: Push Tag
         uses: anothrNick/github-tag-action@1.67.0
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
 
   release:
     name: Create GitHub Release
-    needs: [test, build, security]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build, security, bump-and-tag]
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && needs.bump-and-tag.result == 'success' && needs.bump-and-tag.outputs.new_tag != ''))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set Release Version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ needs.bump-and-tag.outputs.new_tag }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -195,12 +201,13 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           files: |
             artifacts/*.tar.gz
             artifacts/checksums.txt
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          prerelease: ${{ contains(steps.version.outputs.tag, '-rc') || contains(steps.version.outputs.tag, '-beta') || contains(steps.version.outputs.tag, '-alpha') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -214,7 +221,8 @@ jobs:
             exit 0
           fi
           
-          VERSION=${GITHUB_REF_NAME#v}
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION=${TAG#v}
           SHA_LINUX=$(grep silo-linux-amd64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
           SHA_DARWIN_AMD64=$(grep silo-darwin-amd64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
           SHA_DARWIN_ARM64=$(grep silo-darwin-arm64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
@@ -233,18 +241,29 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/silo.rb
           if ! git diff --cached --quiet; then
-            git commit -m "Update silo to v$VERSION"
+            git commit -m "Update silo to $TAG"
             git push origin HEAD:main
           fi
 
   docker:
     name: Build Docker Image
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, bump-and-tag]
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && needs.bump-and-tag.result == 'success' && needs.bump-and-tag.outputs.new_tag != ''))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set Image Tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            V="${{ github.ref_name }}"
+          else
+            V="${{ needs.bump-and-tag.outputs.new_tag }}"
+          fi
+          echo "tag=$V" >> $GITHUB_OUTPUT
+          echo "version=${V#v}" >> $GITHUB_OUTPUT
 
       - name: Download Linux binary
         uses: actions/download-artifact@v4
@@ -275,8 +294,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ steps.version.outputs.tag }}
+            type=raw,value=${{ steps.version.outputs.version }}
             type=sha
 
       - name: Build and push
