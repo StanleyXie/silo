@@ -342,6 +342,7 @@ async fn main() {
             handle_up(*detach).await;
         }
         Commands::Version => {
+            silo::banner::print_banner();
             println!("Silo CLI v{}", env!("CARGO_PKG_VERSION"));
         }
     }

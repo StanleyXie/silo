@@ -1,52 +1,33 @@
-# Silo Centralized Configuration
-# This file controls the behavior of both the Data Plane (Gateway) and Control Plane.
-
-# Optional: Custom directory for auto-generated or manual certificates.
-# Defaults to ~/.silo/certs/ if not specified.
-# certs_dir: "/path/to/custom/certs"
-
-# Gateway Configuration (Data Plane)
 gateway:
-  address: "0.0.0.0:8443"
-  metrics_address: "0.0.0.0:6192"
+  address: 0.0.0.0:8443
+  metrics_address: 0.0.0.0:6192
   tls:
     enabled: true
-    cert_path: "/Users/stanleyxie/.silo/certs/server.crt"
-    key_path: "/Users/stanleyxie/.silo/certs/server.key"
-
-# Control Plane Configuration
+    cert_path: /Users/stanleyxie/.silo/certs/server.crt
+    key_path: /Users/stanleyxie/.silo/certs/server.key
 control_plane:
-  address: "127.0.0.1:50051"
-  allowed_identities: ["stanley.xie", "bad.actor", "gateway.silo.internal"]
+  address: 127.0.0.1:50051
   tls:
-    ca_cert: "/Users/stanleyxie/.silo/certs/internal/ca.crt"
-    server_cert: "/Users/stanleyxie/.silo/certs/internal/control.crt"
-    server_key: "/Users/stanleyxie/.silo/certs/internal/control.key"
-    client_cert: "/Users/stanleyxie/.silo/certs/internal/gateway.crt"
-    client_key: "/Users/stanleyxie/.silo/certs/internal/gateway.key"
-
-# Storage Backend Configuration
+    ca_cert: /Users/stanleyxie/.silo/certs/internal/ca.crt
+    server_cert: /Users/stanleyxie/.silo/certs/internal/server.crt
+    server_key: /Users/stanleyxie/.silo/certs/internal/server.key
+    client_cert: /Users/stanleyxie/.silo/certs/internal/client.crt
+    client_key: /Users/stanleyxie/.silo/certs/internal/client.key
+  allowed_identities:
+  - admin
+  - silo-gateway
 storage:
-  type: "vault" # Options: vault, etcd
+  type: vault
   vault:
-    address: "http://127.0.0.1:8200"
-    token: "root"
-  etcd:
-    endpoints: ["http://127.0.0.1:2389"]
-
-# Authentication Configuration
+    address: http://127.0.0.1:8200
+    token: root
 auth:
   oidc:
-    enabled: false  # Set to true to enable JWT/OIDC auth
-    issuer: "https://gateway.silo.internal"
-    jwks_uri: "https://gateway.silo.internal/.well-known/jwks"
-    audience: "silo.internal"
-
+    enabled: false
+    issuer: ''
+    jwks_uri: ''
   native:
-    enabled: true
-    jwt_secret: "super-secret-silo-key-2026"
-    users:
-      # Default user 'admin' with password 'silo123'
-      - username: "admin"
-        password_hash: "$2b$12$KEOVLz9bXshP8BdAmX5upOD7MANNNAnSWDAvE0bURnIsYZUUCNVXG" # 'silo123'
-        roles: ["admin"]
+    enabled: false
+    users: []
+    jwt_secret: ''
+certs_dir: /Users/stanleyxie/.silo/certs
