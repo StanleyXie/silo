@@ -3,8 +3,13 @@ name: CI - Test & Build
 on:
   push:
     branches: [main, 'feature/**']
+    tags: ['v*']
   pull_request:
     branches: [main]
+
+permissions:
+  contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,7 +57,7 @@ jobs:
         run: cargo test --features etcd
 
   build:
-    name: Build
+    name: Build - ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -83,11 +88,18 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --features etcd
 
+      - name: Create tarball
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/silo dist/
+          cp README.md LICENSE silo.yaml dist/ 2>/dev/null || true
+          cd dist && tar -czvf ../${{ matrix.artifact }}.tar.gz *
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/silo
+          path: ${{ matrix.artifact }}.tar.gz
 
   security:
     name: Security Scan
@@ -158,3 +170,120 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
+
+  release:
+    name: Create GitHub Release
+    needs: [test, build, security]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -name "*.tar.gz" -exec mv {} . \;
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew Tap
+        if: success()
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set. Skipping tap update."
+            exit 0
+          fi
+          
+          VERSION=${GITHUB_REF_NAME#v}
+          SHA_LINUX=$(grep silo-linux-amd64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
+          SHA_DARWIN_AMD64=$(grep silo-darwin-amd64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
+          SHA_DARWIN_ARM64=$(grep silo-darwin-arm64.tar.gz artifacts/checksums.txt | cut -d ' ' -f 1)
+          
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/StanleyXie/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          cp Formula/silo.rb tap/Formula/silo.rb
+          
+          cd tap
+          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/silo.rb
+          sed -i "s/PLACEHOLDER_SHA256_LINUX_AMD64/$SHA_LINUX/" Formula/silo.rb
+          sed -i "s/PLACEHOLDER_SHA256_DARWIN_AMD64/$SHA_DARWIN_AMD64/" Formula/silo.rb
+          sed -i "s/PLACEHOLDER_SHA256_DARWIN_ARM64/$SHA_DARWIN_ARM64/" Formula/silo.rb
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/silo.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "Update silo to v$VERSION"
+            git push origin HEAD:main
+          fi
+
+  docker:
+    name: Build Docker Image
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: silo-linux-amd64
+          path: artifacts
+
+      - name: Extract binary
+        run: |
+          cd artifacts
+          tar -xzvf silo-linux-amd64.tar.gz
+          chmod +x silo
+          mv silo ../
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
