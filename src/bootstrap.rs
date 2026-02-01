@@ -119,6 +119,9 @@ impl BootstrapManager {
         &self,
         detach: bool,
     ) -> Result<std::process::Child, Box<dyn std::error::Error>> {
+        // Pre-flight: Kill any orphan processes on Silo ports
+        self.cleanup_orphan_ports();
+
         let mut server_path = "silo-server".to_string();
 
         // Try local build if not in path
@@ -145,6 +148,30 @@ impl BootstrapManager {
         let child = cmd.spawn()?;
         self.write_pid("silo.pid", child.id())?;
         Ok(child)
+    }
+
+    /// Kill any orphan silo-server processes that may be holding ports
+    fn cleanup_orphan_ports(&self) {
+        let ports = ["50051", "8443", "6192"];
+        for port in ports {
+            // Use lsof to find PIDs on this port and kill them
+            if let Ok(output) = Command::new("lsof")
+                .args(["-t", &format!("-i:{}", port)])
+                .output()
+            {
+                if output.status.success() {
+                    let pids = String::from_utf8_lossy(&output.stdout);
+                    for pid_str in pids.trim().lines() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            println!("⚠️  Killing orphan process on port {} (PID: {})", port, pid);
+                            Self::kill_process(pid);
+                        }
+                    }
+                }
+            }
+        }
+        // Give processes a moment to release ports
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
     fn write_pid(&self, filename: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
