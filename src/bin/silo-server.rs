@@ -451,11 +451,13 @@ fn main() {
     let args = Args::parse();
 
     // Convert to Pingora Opts
-    let mut opt = Opt::default();
-    opt.daemon = args.daemon;
-    opt.upgrade = args.upgrade;
-    opt.test = args.test;
-    opt.conf = args.pingora_config;
+    let opt = Opt {
+        daemon: args.daemon,
+        upgrade: args.upgrade,
+        test: args.test,
+        conf: args.pingora_config,
+        ..Default::default()
+    };
 
     // 2. Load Configuration
     pb.set_message(format!("{}Loading configuration...", LOOKING_GLASS));
