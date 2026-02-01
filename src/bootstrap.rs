@@ -153,25 +153,87 @@ impl BootstrapManager {
     /// Kill any orphan silo-server processes that may be holding ports
     fn cleanup_orphan_ports(&self) {
         let ports = ["50051", "8443", "6192"];
+        let mut killed_any = false;
+
         for port in ports {
-            // Use lsof to find PIDs on this port and kill them
-            if let Ok(output) = Command::new("lsof")
-                .args(["-t", &format!("-i:{}", port)])
-                .output()
-            {
-                if output.status.success() {
-                    let pids = String::from_utf8_lossy(&output.stdout);
-                    for pid_str in pids.trim().lines() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            println!("⚠️  Killing orphan process on port {} (PID: {})", port, pid);
-                            Self::kill_process(pid);
-                        }
-                    }
+            if let Some(pids) = self.find_pids_on_port(port) {
+                for pid in pids {
+                    println!("⚠️  Killing orphan process on port {} (PID: {})", port, pid);
+                    Self::kill_process(pid);
+                    killed_any = true;
                 }
             }
         }
-        // Give processes a moment to release ports
-        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Only wait if we killed something, and poll for port availability
+        if killed_any {
+            self.wait_for_ports_available(&ports);
+        }
+    }
+
+    /// Find PIDs using a given port (cross-platform)
+    fn find_pids_on_port(&self, port: &str) -> Option<Vec<u32>> {
+        #[cfg(unix)]
+        {
+            let output = Command::new("lsof")
+                .args(["-t", &format!("-i:{}", port)])
+                .output()
+                .ok()?;
+
+            if output.status.success() {
+                let pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .lines()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if !pids.is_empty() {
+                    return Some(pids);
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            // Use netstat on Windows
+            let output = Command::new("netstat").args(["-ano"]).output().ok()?;
+
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let pids: Vec<u32> = stdout
+                    .lines()
+                    .filter(|line| line.contains(&format!(":{}", port)))
+                    .filter_map(|line| line.split_whitespace().last()?.parse().ok())
+                    .collect();
+                if !pids.is_empty() {
+                    return Some(pids);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Wait for ports to become available with exponential backoff
+    fn wait_for_ports_available(&self, ports: &[&str]) {
+        let max_attempts = 10;
+        let mut delay_ms = 50;
+
+        for attempt in 1..=max_attempts {
+            let all_free = ports
+                .iter()
+                .all(|port| self.find_pids_on_port(port).is_none());
+
+            if all_free {
+                return;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            delay_ms = (delay_ms * 2).min(500); // Exponential backoff, max 500ms
+
+            if attempt == max_attempts {
+                println!("⚠️  Warning: Some ports may still be in use after cleanup");
+            }
+        }
     }
 
     fn write_pid(&self, filename: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
