@@ -7,3 +7,4 @@ pub mod certs;
 pub mod config;
 pub mod proto;
 pub mod service;
+pub mod shutdown;

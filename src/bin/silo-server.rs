@@ -777,11 +777,17 @@ fn main() {
             .expect("Failed to connect to internal gRPC Storage");
 
         let native_auth = auth::NativeIdentityService::new(silo_cfg.auth.native.clone());
+        let oidc_config = if silo_cfg.auth.oidc.enabled {
+            Some(silo_cfg.auth.oidc.clone())
+        } else {
+            None
+        };
         let handler = ApiHandler::new(
             Arc::new(grpc_storage),
             control_client,
             native_auth,
             certs_dir,
+            oidc_config,
         );
         let req_metric = prometheus::register_int_counter!("req_counter", "Number of requests")
             .expect("Failed to register metric");

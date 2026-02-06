@@ -56,11 +56,14 @@ struct LoginTemplate<'a> {
     error: Option<&'a str>,
 }
 
+use crate::config::OidcConfig;
+
 pub struct ApiHandler {
     client: Arc<dyn StorageBackend>,
     control: ControlServiceClient<Channel>,
     native_auth: NativeIdentityService,
     certs_dir: PathBuf,
+    oidc_config: Option<OidcConfig>,
 }
 
 impl ApiHandler {
@@ -69,13 +72,29 @@ impl ApiHandler {
         control: ControlServiceClient<Channel>,
         native_auth: NativeIdentityService,
         certs_dir: PathBuf,
+        oidc_config: Option<OidcConfig>,
     ) -> Self {
         ApiHandler {
             client,
             control,
             native_auth,
             certs_dir,
+            oidc_config,
         }
+    }
+
+
+    /// Read the full request body by looping until EOF.
+    /// This fixes the truncation bug where large bodies were only partially read.
+    async fn read_full_body(session: &mut Session) -> Result<Bytes> {
+        let mut full_body = bytes::BytesMut::new();
+        loop {
+            match session.read_request_body().await? {
+                Some(chunk) => full_body.extend_from_slice(&chunk),
+                None => break,
+            }
+        }
+        Ok(full_body.freeze())
     }
 
     async fn handle_health(&self, session: &mut Session) -> Result<bool> {
@@ -298,10 +317,8 @@ impl ApiHandler {
                     .and_then(|s| s.parse::<u32>().ok())
                     .unwrap_or(0);
 
-                let body = match session.read_request_body().await? {
-                    Some(b) => b,
-                    None => Bytes::new(),
-                };
+                let body = Self::read_full_body(session).await?;
+
 
                 match self.client.put(&vault_path, &body, base_version).await {
                     Ok(state_version) => {
@@ -385,10 +402,8 @@ impl ApiHandler {
 
         match *method {
             http::Method::POST | http::Method::PUT => {
-                let body = match session.read_request_body().await? {
-                    Some(b) => b,
-                    None => Bytes::new(),
-                };
+                let body = Self::read_full_body(session).await?;
+
 
                 let lock_info: Option<LockInfo> = serde_json::from_slice(&body).ok();
                 let caller = lock_info.as_ref().map(|li| li.Who.as_str()).unwrap_or("-");
@@ -519,10 +534,8 @@ impl ApiHandler {
             }
             http::Method::POST | http::Method::PUT => {
                 info!("[{}] PUT Config: {}", request_id, config_path);
-                let body = match session.read_request_body().await? {
-                    Some(b) => b,
-                    None => Bytes::new(),
-                };
+                let body = Self::read_full_body(session).await?;
+
 
                 match self.client.put(&config_path, &body, 0).await {
                     Ok(_ver) => {
@@ -597,11 +610,47 @@ impl ApiHandler {
                             .into_owned()
                             .collect();
 
-                    let redirect_uri = params
+                    let cli_redirect_uri = params
                         .get("redirect_uri")
                         .map(|s| s.as_str())
                         .unwrap_or("/");
                     let state = params.get("state").map(|s| s.as_str()).unwrap_or("");
+
+                    // Check if OIDC with Google OAuth is configured
+                    if let Some(ref oidc) = self.oidc_config {
+                        if let (Some(client_id), Some(redirect_uri)) = (&oidc.client_id, &oidc.redirect_uri) {
+                            // Store the CLI's redirect_uri and state in a session cookie or encode in state
+                            // For simplicity, we'll encode both in the state parameter
+                            let combined_state = format!("{}|{}", state, cli_redirect_uri);
+                            let encoded_state = base64::Engine::encode(
+                                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                                combined_state.as_bytes(),
+                            );
+                            
+                            // Use configurable authorization endpoint, default to Google
+                            let default_auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth".to_string();
+                            let auth_endpoint = oidc.authorization_endpoint.as_ref().unwrap_or(&default_auth_endpoint);
+                            
+                            // Build OAuth authorization URL (works with Vault, Google, etc.)
+                            let auth_url = format!(
+                                "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email%20profile&state={}",
+                                auth_endpoint,
+                                urlencoding::encode(client_id),
+                                urlencoding::encode(redirect_uri),
+                                urlencoding::encode(&encoded_state),
+                            );
+
+                            info!("Redirecting to OIDC Provider: {}", auth_url);
+
+                            let mut resp_header =
+                                Box::new(pingora_http::ResponseHeader::build(302, Some(1)).unwrap());
+                            resp_header.insert_header("Location", auth_url).unwrap();
+                            session.write_response_header(resp_header, true).await?;
+                            return Ok(true);
+                        }
+                    }
+
+                    // Fall back to native login form
                     let response_type = params
                         .get("response_type")
                         .map(|s| s.as_str())
@@ -609,7 +658,7 @@ impl ApiHandler {
                     let client_id = params.get("client_id").map(|s| s.as_str()).unwrap_or("");
 
                     let template = LoginTemplate {
-                        redirect_uri,
+                        redirect_uri: cli_redirect_uri,
                         state,
                         response_type,
                         client_id,
@@ -635,11 +684,9 @@ impl ApiHandler {
                         .await?;
                     return Ok(true);
                 }
+
                 http::Method::POST => {
-                    let body = match session.read_request_body().await? {
-                        Some(b) => b,
-                        None => Bytes::new(),
-                    };
+                    let body = Self::read_full_body(session).await?;
                     let params: std::collections::HashMap<String, String> =
                         url::form_urlencoded::parse(&body).into_owned().collect();
 
@@ -709,10 +756,7 @@ impl ApiHandler {
 
         // Handle /auth/token (Exchange Code for Token)
         if path == "/auth/token" && *method == http::Method::POST {
-            let body = match session.read_request_body().await? {
-                Some(b) => b,
-                None => Bytes::new(),
-            };
+            let body = Self::read_full_body(session).await?;
             let params: std::collections::HashMap<_, _> =
                 url::form_urlencoded::parse(&body).into_owned().collect();
             let code = params.get("code").map(|s| s.as_str()).unwrap_or("");
@@ -788,6 +832,127 @@ impl ApiHandler {
                     return Ok(true);
                 }
             }
+        }
+
+        // Handle /auth/callback (OIDC Provider callback - Vault, Google, etc.)
+        if path == "/auth/callback" && *method == http::Method::GET {
+            let query = session.req_header().uri.query().unwrap_or("");
+            let params: std::collections::HashMap<String, String> =
+                url::form_urlencoded::parse(query.as_bytes())
+                    .into_owned()
+                    .collect();
+
+            let code = params.get("code").map(|s| s.as_str()).unwrap_or("");
+            let encoded_state = params.get("state").map(|s| s.as_str()).unwrap_or("");
+
+            // Decode state to get original state and CLI redirect_uri
+            let state_bytes = base64::Engine::decode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                encoded_state,
+            ).unwrap_or_default();
+            let combined_state = String::from_utf8_lossy(&state_bytes);
+            let parts: Vec<&str> = combined_state.splitn(2, '|').collect();
+            let (original_state, cli_redirect_uri) = if parts.len() == 2 {
+                (parts[0], parts[1])
+            } else {
+                ("", "/")
+            };
+
+            if code.is_empty() {
+                // Handle error case
+                let error = params.get("error").map(|s| s.as_str()).unwrap_or("unknown_error");
+                let location = format!("{}?error={}&state={}", cli_redirect_uri, error, original_state);
+                let mut resp_header =
+                    Box::new(pingora_http::ResponseHeader::build(302, Some(1)).unwrap());
+                resp_header.insert_header("Location", location).unwrap();
+                session.write_response_header(resp_header, true).await?;
+                return Ok(true);
+            }
+
+            // Exchange code for tokens with OIDC provider
+            if let Some(ref oidc) = self.oidc_config {
+                if let (Some(client_id), Some(client_secret), Some(redirect_uri)) =
+                    (&oidc.client_id, &oidc.client_secret, &oidc.redirect_uri)
+                {
+                    // Use configurable token endpoint, default to Google
+                    let default_token_endpoint = "https://oauth2.googleapis.com/token".to_string();
+                    let token_url = oidc.token_endpoint.as_ref().unwrap_or(&default_token_endpoint);
+                    
+                    let client = reqwest::Client::new();
+                    
+                    let token_response = client
+                        .post(token_url)
+                        .form(&[
+                            ("code", code),
+                            ("client_id", client_id.as_str()),
+                            ("client_secret", client_secret.as_str()),
+                            ("redirect_uri", redirect_uri.as_str()),
+                            ("grant_type", "authorization_code"),
+                        ])
+                        .send()
+                        .await;
+
+                    match token_response {
+                        Ok(resp) => {
+                            if resp.status().is_success() {
+                                let body = resp.text().await.unwrap_or_default();
+                                let token_data: serde_json::Value =
+                                    serde_json::from_str(&body).unwrap_or_default();
+
+                                // Extract id_token (contains user info)
+                                let id_token = token_data
+                                    .get("id_token")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+
+                                // Generate a code for the CLI to exchange
+                                let auth_code: String = rand::thread_rng()
+                                    .sample_iter(&Alphanumeric)
+                                    .take(32)
+                                    .map(char::from)
+                                    .collect();
+
+                                // Determine the source based on configuration
+                                let source = if oidc.authorization_endpoint.is_some() { "oidc_provider" } else { "google_oauth" };
+
+                                // Store the OIDC tokens temporarily
+                                let code_path = format!("secret/silo/codes/{}", auth_code);
+                                let code_data = serde_json::json!({
+                                    "id_token": id_token,
+                                    "access_token": token_data.get("access_token").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "source": source,
+                                    "ttl": chrono::Utc::now().to_rfc3339()
+                                });
+                                
+                                if let Err(e) = self.client.put(&code_path, code_data.to_string().as_bytes(), 0).await {
+                                    error!("Failed to store OAuth code: {}", e);
+                                }
+
+                                // Redirect to CLI with the code
+                                let location = format!("{}?code={}&state={}", cli_redirect_uri, auth_code, original_state);
+                                info!("OAuth callback successful, redirecting to CLI: {}", location);
+                                
+                                let mut resp_header =
+                                    Box::new(pingora_http::ResponseHeader::build(302, Some(1)).unwrap());
+                                resp_header.insert_header("Location", location).unwrap();
+                                session.write_response_header(resp_header, true).await?;
+                                return Ok(true);
+                            } else {
+                                error!("Google token exchange failed: {}", resp.status());
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to exchange code with Google: {}", e);
+                        }
+                    }
+                }
+            }
+
+            // Fallback: error
+            session
+                .respond_error_with_body(500, Bytes::from("OAuth callback failed"))
+                .await?;
+            return Ok(true);
         }
 
         // Handle /auth/exchange (Exchange JWT for mTLS Certs)
