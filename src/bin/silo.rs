@@ -48,15 +48,53 @@ enum Commands {
         /// Run in background (detach)
         #[arg(short, long)]
         detach: bool,
+        /// Use dev mode for Vault (ephemeral, no persistence)
+        #[arg(long)]
+        dev: bool,
+        /// Use raft storage for Vault (HA cluster mode)
+        #[arg(long)]
+        raft: bool,
     },
-    /// Stop the Silo environment
-    Stop,
+    /// Stop the Silo environment gracefully
+    Stop {
+        /// Force stop even with active sessions
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Restart the Silo environment gracefully
+    Restart {
+        /// Force restart even with active sessions
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Stop and cleanup the Silo environment
-    Down,
+    Down {
+        /// Force stop even with active sessions
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Management of Silo as a system service
     Service {
         #[command(subcommand)]
         subcommand: ServiceCommands,
+    },
+    /// Setup Vault as OIDC Provider for Silo authentication
+    SetupOidc {
+        /// Vault address
+        #[arg(long, default_value = "http://127.0.0.1:8200")]
+        vault_addr: String,
+        /// Vault token (root token for dev mode)
+        #[arg(long, default_value = "root")]
+        vault_token: String,
+        /// Admin username to create
+        #[arg(long, default_value = "admin")]
+        username: String,
+        /// Admin password (prompted if not provided)
+        #[arg(long)]
+        password: Option<String>,
+        /// Silo callback URL for OIDC
+        #[arg(long, default_value = "https://127.0.0.1:8443/auth/callback")]
+        redirect_uri: String,
     },
     /// Print version information
     Version,
@@ -85,21 +123,21 @@ enum ServiceCommands {
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Stop => {
-            let manager = BootstrapManager::new("silo.yaml");
-            if let Err(e) = manager.stop_environment() {
-                println!("❌ Error stopping environment: {}", e);
-            }
+        Commands::Stop { force } => {
+            handle_stop(*force).await;
         }
-        Commands::Down => {
-            let manager = BootstrapManager::new("silo.yaml");
-            if let Err(e) = manager.stop_environment() {
-                println!("❌ Error stopping environment: {}", e);
-            }
+        Commands::Restart { force } => {
+            handle_stop(*force).await;
+            println!();
+            // Restart defaults to file mode (persistent storage)
+            handle_up(true, false, false).await;
+        }
+        Commands::Down { force } => {
+            handle_stop(*force).await;
             // Additional cleanup could go here
         }
         Commands::SelfTest => {
@@ -411,8 +449,24 @@ async fn main() {
         } => {
             handle_init(*non_interactive, *service).await;
         }
-        Commands::Up { detach } => {
-            handle_up(*detach).await;
+        Commands::Up { detach, dev, raft } => {
+            handle_up(*detach, *dev, *raft).await;
+        }
+        Commands::SetupOidc {
+            vault_addr,
+            vault_token,
+            username,
+            password,
+            redirect_uri,
+        } => {
+            handle_setup_oidc(
+                vault_addr,
+                vault_token,
+                username,
+                password.clone(),
+                redirect_uri,
+            )
+            .await;
         }
         Commands::Version => {
             silo::banner::print_banner();
@@ -508,7 +562,7 @@ async fn handle_init(non_interactive: bool, service: bool) {
     println!("\n✨ Initialization complete! Run 'silo up' to start the environment.");
 }
 
-async fn handle_up(detach: bool) {
+async fn handle_up(detach: bool, dev: bool, raft: bool) {
     if !Path::new("silo.yaml").exists() {
         println!("❌ Error: silo.yaml not found.");
         println!("Run 'silo init' first to generate a configuration.");
@@ -518,25 +572,70 @@ async fn handle_up(detach: bool) {
     silo::banner::print_banner();
     println!("⬆️ Starting Silo Environment...");
     let manager = BootstrapManager::new("silo.yaml");
+    manager.cleanup_orphan_ports();
 
-    // 1. Start Vault
+    // Load config to determine storage backend
+    let config = match silo::config::Config::load("silo.yaml") {
+        Ok(c) => c,
+        Err(e) => {
+            println!("❌ Failed to load silo.yaml: {}", e);
+            return;
+        }
+    };
+
+    // 1. Start storage backend (Vault or etcd)
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
             .unwrap(),
     );
-    pb.set_message("Starting Vault (Dev Mode)...");
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    match manager.start_vault_dev().await {
-        Ok(_) => pb.finish_with_message("✅ Vault is ready."),
-        Err(e) => {
-            pb.finish_with_message(format!("❌ Vault failed: {}", e));
-            // Maybe it's already running? Let's check.
-            if e.to_string().contains("responding") {
-                println!("   (Vault might be already running or unreachable)");
+    match config.storage.storage_type.as_str() {
+        "vault" => {
+            // Determine Vault storage mode
+            let mode = if dev {
+                pb.set_message("Starting Vault (Dev Mode - Ephemeral)...");
+                silo::bootstrap::VaultStorageMode::Dev
+            } else if raft {
+                pb.set_message("Starting Vault (Raft Mode - HA)...");
+                silo::bootstrap::VaultStorageMode::Raft
+            } else {
+                pb.set_message("Starting Vault (File Mode - Persistent)...");
+                silo::bootstrap::VaultStorageMode::File
+            };
+            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+            match manager.start_vault(mode).await {
+                Ok(info) => {
+                    pb.finish_with_message(format!("✅ Vault is ready. ({})", info));
+                }
+                Err(e) => {
+                    pb.finish_with_message(format!("❌ Vault failed: {}", e));
+                    if e.to_string().contains("responding") {
+                        println!("   (Vault might be already running or unreachable)");
+                    }
+                    return; // Stop here if Vault is critical
+                }
             }
+        }
+        "etcd" => {
+            pb.set_message("Starting etcd (Dev Mode)...");
+            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+            match manager.start_etcd_dev().await {
+                Ok(_) => pb.finish_with_message("✅ etcd is ready."),
+                Err(e) => {
+                    pb.finish_with_message(format!("❌ etcd failed: {}", e));
+                    if e.to_string().contains("responding") {
+                        println!("   (etcd might be already running or unreachable)");
+                    }
+                    return;
+                }
+            }
+        }
+        other => {
+            pb.finish_with_message(format!("⚠️  Unknown storage type: {}", other));
         }
     }
 
@@ -559,10 +658,378 @@ async fn handle_up(detach: bool) {
         }
     }
 
-    // 3. Health Check
-    println!("🔍 Finalizing health check...");
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    // 3. Health Check with proper readiness verification
+    let pb2 = ProgressBar::new_spinner();
+    pb2.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
+    pb2.set_message("Waiting for server to become healthy...");
+    pb2.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    // We should call the status logic here but for now just print success
-    println!("\n🚀 Silo is UP and HEALTHY.");
+    let endpoint = "https://127.0.0.1:8443";
+    if manager.wait_for_healthy(endpoint, 30).await {
+        pb2.finish_with_message("✅ Server is healthy.");
+        println!("\n🚀 Silo is UP and HEALTHY.");
+    } else {
+        pb2.finish_with_message("⚠️  Health check timed out.");
+        println!("\n⚠️  Silo may not be fully ready. Check logs with 'silo service logs'.");
+    }
+}
+
+async fn handle_stop(force: bool) {
+    silo::banner::print_banner();
+    println!("🛑 Stopping Silo Environment...");
+
+    let manager = BootstrapManager::new("silo.yaml");
+
+    // Check for active sessions unless --force is used
+    if !force {
+        check_active_sessions().await;
+    } else {
+        println!("⚠️  Force mode: skipping session check.");
+    }
+
+    // Stop services in order: Silo Server first, then storage backends
+    stop_process(&manager, "Silo Server", "silo.pid", 15);
+    stop_process(&manager, "Vault", "vault.pid", 10);
+    stop_process(&manager, "etcd", "etcd.pid", 10);
+
+    println!("\n✅ Silo environment stopped.");
+}
+
+/// Check for active sessions before stopping
+async fn check_active_sessions() {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.blue} {msg}")
+            .unwrap(),
+    );
+    pb.set_message("Checking for active sessions...");
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    match client.get("https://127.0.0.1:8443/health").send().await {
+        Ok(_) => pb.finish_with_message("✅ No active blocking sessions detected."),
+        Err(_) => pb.finish_with_message("ℹ️  Server not responding, proceeding with cleanup."),
+    }
+}
+
+/// Stop a process gracefully with SIGTERM, then SIGKILL if needed
+fn stop_process(manager: &BootstrapManager, name: &str, pid_file: &str, timeout_secs: u64) {
+    if let Some(pid) = manager.read_pid(pid_file) {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.red} {msg}")
+                .unwrap(),
+        );
+        pb.set_message(format!("Stopping {} (PID: {})...", name, pid));
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        // Send SIGTERM
+        send_signal(pid, "SIGTERM");
+
+        // Wait for process to terminate
+        if manager.wait_for_stopped(pid_file, timeout_secs) {
+            pb.finish_with_message(format!("✅ {} stopped.", name));
+        } else {
+            pb.finish_with_message(format!("⚠️  {} did not stop gracefully, forcing...", name));
+            send_signal(pid, "SIGKILL");
+        }
+        manager.cleanup_pid(pid_file);
+    } else {
+        println!("ℹ️  {} not running.", name);
+    }
+}
+
+/// Send a signal to a process (Unix only)
+fn send_signal(pid: u32, signal: &str) {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let _ = Command::new("kill")
+            .arg(format!("-{}", signal))
+            .arg(pid.to_string())
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        if signal == "SIGKILL" || signal == "SIGTERM" {
+            use std::process::Command;
+            let _ = Command::new("taskkill")
+                .arg("/F")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .status();
+        }
+    }
+}
+
+/// Setup Vault as OIDC Provider for Silo authentication
+async fn handle_setup_oidc(
+    vault_addr: &str,
+    vault_token: &str,
+    username: &str,
+    password: Option<String>,
+    redirect_uri: &str,
+) {
+    silo::banner::print_banner();
+    println!("🔐 Setting up Vault OIDC Provider...\n");
+
+    // Prompt for password if not provided
+    let password = match password {
+        Some(p) => p,
+        None => {
+            use dialoguer::Password;
+            Password::new()
+                .with_prompt("Enter password for admin user")
+                .with_confirmation("Confirm password", "Passwords don't match")
+                .interact()
+                .unwrap_or_else(|_| {
+                    eprintln!("❌ Failed to read password");
+                    std::process::exit(1);
+                })
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let pb = ProgressBar::new(10);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("  {spinner:.green} {msg}")
+            .unwrap(),
+    );
+
+    // 1. Enable userpass auth
+    pb.set_message("Enabling userpass auth...");
+    let _ = client
+        .post(format!("{}/v1/sys/auth/userpass", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({"type": "userpass"}))
+        .send()
+        .await;
+    pb.inc(1);
+
+    // 2. Create silo-admin policy
+    pb.set_message("Creating silo-admin policy...");
+    let policy_hcl = r#"
+path "identity/*" { capabilities = ["create", "read", "update", "delete", "list"] }
+path "auth/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+path "auth/token/*" { capabilities = ["create", "read", "update", "delete", "list"] }
+path "sys/*" { capabilities = ["read", "list"] }
+path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] }
+"#;
+    let _ = client
+        .put(format!("{}/v1/sys/policies/acl/silo-admin", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({"policy": policy_hcl}))
+        .send()
+        .await;
+    pb.inc(1);
+
+    // 3. Create admin user
+    pb.set_message(format!("Creating user: {}...", username));
+    let _ = client
+        .post(format!(
+            "{}/v1/auth/userpass/users/{}",
+            vault_addr, username
+        ))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "password": password,
+            "policies": "default,silo-admin"
+        }))
+        .send()
+        .await;
+    pb.inc(1);
+
+    // 4. Create identity entity
+    pb.set_message("Creating identity entity...");
+    let entity_resp = client
+        .post(format!("{}/v1/identity/entity", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "name": format!("{}-entity", username),
+            "metadata": {"email": format!("{}@silo.local", username)}
+        }))
+        .send()
+        .await;
+
+    let entity_id = if let Ok(resp) = entity_resp {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        body["data"]["id"].as_str().unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+    pb.inc(1);
+
+    // 5. Get userpass accessor and create entity-alias
+    pb.set_message("Linking entity to userpass...");
+    let auth_resp = client
+        .get(format!("{}/v1/sys/auth", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .send()
+        .await;
+
+    if let Ok(resp) = auth_resp {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        if let Some(accessor) = body["userpass/"]["accessor"].as_str() {
+            let _ = client
+                .post(format!("{}/v1/identity/entity-alias", vault_addr))
+                .header("X-Vault-Token", vault_token)
+                .json(&serde_json::json!({
+                    "name": username,
+                    "mount_accessor": accessor,
+                    "canonical_id": entity_id
+                }))
+                .send()
+                .await;
+        }
+    }
+    pb.inc(1);
+
+    // 6. Create OIDC key
+    pb.set_message("Creating OIDC key...");
+    let _ = client
+        .post(format!("{}/v1/identity/oidc/key/silo-key", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({"algorithm": "RS256"}))
+        .send()
+        .await;
+    pb.inc(1);
+
+    // 7. Create OIDC assignment
+    pb.set_message("Creating OIDC assignment...");
+    let _ = client
+        .post(format!(
+            "{}/v1/identity/oidc/assignment/silo-users",
+            vault_addr
+        ))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "entity_ids": [entity_id]
+        }))
+        .send()
+        .await;
+    pb.inc(1);
+
+    // 8. Create OIDC client
+    pb.set_message("Creating OIDC client...");
+    let _ = client
+        .post(format!("{}/v1/identity/oidc/client/silo-cli", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "redirect_uris": [redirect_uri],
+            "assignments": ["silo-users"],
+            "key": "silo-key",
+            "id_token_ttl": "30m",
+            "access_token_ttl": "1h"
+        }))
+        .send()
+        .await;
+    pb.inc(1);
+
+    // 9. Get client credentials
+    let client_resp = client
+        .get(format!("{}/v1/identity/oidc/client/silo-cli", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .send()
+        .await;
+
+    let (client_id, client_secret) = if let Ok(resp) = client_resp {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        (
+            body["data"]["client_id"].as_str().unwrap_or("").to_string(),
+            body["data"]["client_secret"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+        )
+    } else {
+        (String::new(), String::new())
+    };
+
+    // 10. Authorize key for client and create provider
+    pb.set_message("Creating OIDC provider...");
+    let _ = client
+        .post(format!("{}/v1/identity/oidc/key/silo-key", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "algorithm": "RS256",
+            "allowed_client_ids": [&client_id]
+        }))
+        .send()
+        .await;
+
+    // Create profile scope
+    let _ = client
+        .post(format!("{}/v1/identity/oidc/scope/profile", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "template": r#"{"name": {{identity.entity.name}}}"#,
+            "description": "Profile scope"
+        }))
+        .send()
+        .await;
+
+    let _ = client
+        .post(format!("{}/v1/identity/oidc/provider/silo", vault_addr))
+        .header("X-Vault-Token", vault_token)
+        .json(&serde_json::json!({
+            "allowed_client_ids": [&client_id],
+            "scopes_supported": ["profile"]
+        }))
+        .send()
+        .await;
+    pb.inc(1);
+
+    pb.finish_and_clear();
+
+    // Print summary
+    println!("  ✅ Enabled userpass auth");
+    println!("  ✅ Created policy: silo-admin");
+    println!("  ✅ Created user: {}", username);
+    println!("  ✅ Created identity entity");
+    println!("  ✅ Created OIDC key: silo-key");
+    println!("  ✅ Created OIDC client: silo-cli");
+    println!("  ✅ Created OIDC provider: silo");
+    println!();
+
+    // Print OIDC config for silo.yaml
+    println!("📝 Add this to your silo.yaml:");
+    println!("────────────────────────────────────────");
+    println!("auth:");
+    println!("  oidc:");
+    println!("    enabled: true");
+    println!(
+        "    issuer: \"{}/v1/identity/oidc/provider/silo\"",
+        vault_addr
+    );
+    println!(
+        "    jwks_uri: \"{}/v1/identity/oidc/provider/silo/.well-known/keys\"",
+        vault_addr
+    );
+    println!(
+        "    authorization_endpoint: \"{}/ui/vault/identity/oidc/provider/silo/authorize\"",
+        vault_addr
+    );
+    println!(
+        "    token_endpoint: \"{}/v1/identity/oidc/provider/silo/token\"",
+        vault_addr
+    );
+    println!("    client_id: \"{}\"", client_id);
+    println!("    client_secret: \"{}\"", client_secret);
+    println!("    redirect_uri: \"{}\"", redirect_uri);
+    println!("────────────────────────────────────────");
+    println!();
+    println!("🎉 Vault OIDC setup complete!");
+    println!("   Login with: silo login --endpoint https://127.0.0.1:8443");
 }

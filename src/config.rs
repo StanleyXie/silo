@@ -54,6 +54,21 @@ pub struct OidcConfig {
     pub jwks_uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
+    /// OAuth 2.0 Client ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// OAuth 2.0 Client Secret
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    /// OAuth redirect URI (e.g., https://127.0.0.1:8443/auth/callback)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_uri: Option<String>,
+    /// Authorization endpoint URL (defaults to Google if not set)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_endpoint: Option<String>,
+    /// Token exchange endpoint URL (defaults to Google if not set)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

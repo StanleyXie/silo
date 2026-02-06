@@ -16,16 +16,22 @@ control_plane:
   allowed_identities:
   - admin
   - silo-gateway
+  - gateway.silo.internal
 storage:
   type: vault
   vault:
     address: http://127.0.0.1:8200
-    token: root
+    token: YOUR_VAULT_TOKEN_HERE
 auth:
   oidc:
-    enabled: false
-    issuer: ''
-    jwks_uri: ''
+    enabled: true
+    issuer: http://127.0.0.1:8200/v1/identity/oidc/provider/silo
+    jwks_uri: http://127.0.0.1:8200/v1/identity/oidc/provider/silo/.well-known/keys
+    client_id: f9Q8Ppg2QwzQ0M4KwE13zMZQh1wq3xa4
+    client_secret: hvo_secret_skStrLzaeFAUzJAoy3VFXEDTY5fXHQEzfBVvnfGRKkAfy7OmxVDTVvCSmkPsjyOv
+    redirect_uri: https://127.0.0.1:8443/auth/callback
+    authorization_endpoint: http://127.0.0.1:8200/ui/vault/identity/oidc/provider/silo/authorize
+    token_endpoint: http://127.0.0.1:8200/v1/identity/oidc/provider/silo/token
   native:
     enabled: false
     users: []

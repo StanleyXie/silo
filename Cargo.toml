@@ -1,6 +1,6 @@
 [package]
 name = "silo"
-version = "0.3.25"
+version = "0.3.27"
 edition = "2021"
 description = "Secure Terraform State Gateway with mTLS, OIDC, and governance controls"
 license = "MIT"
@@ -48,11 +48,13 @@ dirs = "6.0.0"
 indicatif = "0.17"
 console = "0.15"
 bcrypt = "0.15"
+keyring = "3"
 askama = "0.12"
 rand = "0.8"
 url = "2.2"
 webbrowser = "1.0"
 dialoguer = "0.12.0"
+urlencoding = "2.1"
 
 [build-dependencies]
 tonic-build = "0.11"
