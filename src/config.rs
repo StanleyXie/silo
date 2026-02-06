@@ -71,8 +71,6 @@ pub struct OidcConfig {
     pub token_endpoint: Option<String>,
 }
 
-
-
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GatewayConfig {
     pub address: String,

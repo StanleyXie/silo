@@ -169,7 +169,10 @@ impl GracefulShutdown {
             }
 
             // Timeout - force kill
-            warn!("Process {} did not terminate gracefully, sending SIGKILL", pid);
+            warn!(
+                "Process {} did not terminate gracefully, sending SIGKILL",
+                pid
+            );
             let _ = Command::new("kill")
                 .arg("-SIGKILL")
                 .arg(pid.to_string())

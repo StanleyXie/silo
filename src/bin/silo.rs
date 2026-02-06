@@ -100,7 +100,6 @@ enum Commands {
     Version,
 }
 
-
 #[derive(Subcommand)]
 enum ServiceCommands {
     /// Install Silo component as a systemd service
@@ -460,7 +459,14 @@ async fn main() {
             password,
             redirect_uri,
         } => {
-            handle_setup_oidc(vault_addr, vault_token, username, password.clone(), redirect_uri).await;
+            handle_setup_oidc(
+                vault_addr,
+                vault_token,
+                username,
+                password.clone(),
+                redirect_uri,
+            )
+            .await;
         }
         Commands::Version => {
             silo::banner::print_banner();
@@ -632,7 +638,6 @@ async fn handle_up(detach: bool, dev: bool, raft: bool) {
             pb.finish_with_message(format!("⚠️  Unknown storage type: {}", other));
         }
     }
-
 
     // 2. Start Silo Server
     pb.reset();
@@ -833,7 +838,10 @@ path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] 
     // 3. Create admin user
     pb.set_message(format!("Creating user: {}...", username));
     let _ = client
-        .post(format!("{}/v1/auth/userpass/users/{}", vault_addr, username))
+        .post(format!(
+            "{}/v1/auth/userpass/users/{}",
+            vault_addr, username
+        ))
         .header("X-Vault-Token", vault_token)
         .json(&serde_json::json!({
             "password": password,
@@ -854,7 +862,7 @@ path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] 
         }))
         .send()
         .await;
-    
+
     let entity_id = if let Ok(resp) = entity_resp {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         body["data"]["id"].as_str().unwrap_or("").to_string()
@@ -870,7 +878,7 @@ path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] 
         .header("X-Vault-Token", vault_token)
         .send()
         .await;
-    
+
     if let Ok(resp) = auth_resp {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         if let Some(accessor) = body["userpass/"]["accessor"].as_str() {
@@ -901,7 +909,10 @@ path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] 
     // 7. Create OIDC assignment
     pb.set_message("Creating OIDC assignment...");
     let _ = client
-        .post(format!("{}/v1/identity/oidc/assignment/silo-users", vault_addr))
+        .post(format!(
+            "{}/v1/identity/oidc/assignment/silo-users",
+            vault_addr
+        ))
         .header("X-Vault-Token", vault_token)
         .json(&serde_json::json!({
             "entity_ids": [entity_id]
@@ -932,12 +943,15 @@ path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] 
         .header("X-Vault-Token", vault_token)
         .send()
         .await;
-    
+
     let (client_id, client_secret) = if let Ok(resp) = client_resp {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         (
             body["data"]["client_id"].as_str().unwrap_or("").to_string(),
-            body["data"]["client_secret"].as_str().unwrap_or("").to_string(),
+            body["data"]["client_secret"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
         )
     } else {
         (String::new(), String::new())
@@ -995,10 +1009,22 @@ path "secret/*" { capabilities = ["create", "read", "update", "delete", "list"] 
     println!("auth:");
     println!("  oidc:");
     println!("    enabled: true");
-    println!("    issuer: \"{}/v1/identity/oidc/provider/silo\"", vault_addr);
-    println!("    jwks_uri: \"{}/v1/identity/oidc/provider/silo/.well-known/keys\"", vault_addr);
-    println!("    authorization_endpoint: \"{}/ui/vault/identity/oidc/provider/silo/authorize\"", vault_addr);
-    println!("    token_endpoint: \"{}/v1/identity/oidc/provider/silo/token\"", vault_addr);
+    println!(
+        "    issuer: \"{}/v1/identity/oidc/provider/silo\"",
+        vault_addr
+    );
+    println!(
+        "    jwks_uri: \"{}/v1/identity/oidc/provider/silo/.well-known/keys\"",
+        vault_addr
+    );
+    println!(
+        "    authorization_endpoint: \"{}/ui/vault/identity/oidc/provider/silo/authorize\"",
+        vault_addr
+    );
+    println!(
+        "    token_endpoint: \"{}/v1/identity/oidc/provider/silo/token\"",
+        vault_addr
+    );
     println!("    client_id: \"{}\"", client_id);
     println!("    client_secret: \"{}\"", client_secret);
     println!("    redirect_uri: \"{}\"", redirect_uri);

@@ -104,13 +104,16 @@ impl BootstrapManager {
 
     /// Start Vault with the specified storage mode
     /// Returns a description of the mode used
-    pub async fn start_vault(&self, mode: VaultStorageMode) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn start_vault(
+        &self,
+        mode: VaultStorageMode,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let silo_dir = dirs::home_dir()
             .ok_or("Could not find home directory")?
             .join(".silo");
-        
+
         fs::create_dir_all(&silo_dir)?;
-        
+
         match mode {
             VaultStorageMode::Dev => self.start_vault_dev_mode().await,
             VaultStorageMode::File => self.start_vault_file_mode(&silo_dir).await,
@@ -135,15 +138,19 @@ impl BootstrapManager {
     }
 
     /// File mode: persistent local storage
-    async fn start_vault_file_mode(&self, silo_dir: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    async fn start_vault_file_mode(
+        &self,
+        silo_dir: &std::path::Path,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let config_path = silo_dir.join("vault.hcl");
         let data_dir = silo_dir.join("vault-data");
         let keys_path = silo_dir.join("vault-keys.json");
-        
+
         fs::create_dir_all(&data_dir)?;
-        
+
         // Generate Vault config
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
 storage "file" {{
   path = "{}"
 }}
@@ -156,11 +163,13 @@ listener "tcp" {{
 api_addr = "http://127.0.0.1:8200"
 ui = true
 disable_mlock = true
-"#, data_dir.display());
-        
+"#,
+            data_dir.display()
+        );
+
         let mut file = fs::File::create(&config_path)?;
         file.write_all(config_content.as_bytes())?;
-        
+
         // Start Vault server
         let child = Command::new("vault")
             .args(["server", "-config", config_path.to_str().unwrap()])
@@ -173,22 +182,26 @@ disable_mlock = true
 
         // Wait for Vault to be ready
         self.wait_for_vault().await?;
-        
+
         // Initialize and unseal if needed
         let token = self.initialize_and_unseal(&keys_path).await?;
         Ok(format!("file mode, token={}", &token[..8.min(token.len())]))
     }
 
     /// Raft mode: HA cluster storage
-    async fn start_vault_raft_mode(&self, silo_dir: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    async fn start_vault_raft_mode(
+        &self,
+        silo_dir: &std::path::Path,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let config_path = silo_dir.join("vault-raft.hcl");
         let data_dir = silo_dir.join("vault-raft");
         let keys_path = silo_dir.join("vault-keys.json");
-        
+
         fs::create_dir_all(&data_dir)?;
-        
+
         // Generate Vault raft config
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
 storage "raft" {{
   path    = "{}"
   node_id = "silo-1"
@@ -203,11 +216,13 @@ api_addr = "http://127.0.0.1:8200"
 cluster_addr = "http://127.0.0.1:8201"
 ui = true
 disable_mlock = true
-"#, data_dir.display());
-        
+"#,
+            data_dir.display()
+        );
+
         let mut file = fs::File::create(&config_path)?;
         file.write_all(config_content.as_bytes())?;
-        
+
         // Start Vault server
         let child = Command::new("vault")
             .args(["server", "-config", config_path.to_str().unwrap()])
@@ -220,7 +235,7 @@ disable_mlock = true
 
         // Wait for Vault to be ready
         self.wait_for_vault().await?;
-        
+
         // Initialize and unseal if needed
         let token = self.initialize_and_unseal(&keys_path).await?;
         Ok(format!("raft mode, token={}", &token[..8.min(token.len())]))
@@ -247,9 +262,12 @@ disable_mlock = true
     }
 
     /// Initialize Vault and unseal, returns root token
-    async fn initialize_and_unseal(&self, keys_path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    async fn initialize_and_unseal(
+        &self,
+        keys_path: &std::path::Path,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
-        
+
         // Check if already initialized
         let init_status: serde_json::Value = client
             .get("http://127.0.0.1:8200/v1/sys/init")
@@ -257,7 +275,7 @@ disable_mlock = true
             .await?
             .json()
             .await?;
-        
+
         let (unseal_keys, root_token) = if init_status["initialized"].as_bool() == Some(false) {
             // Initialize Vault
             let init_resp: serde_json::Value = client
@@ -270,19 +288,23 @@ disable_mlock = true
                 .await?
                 .json()
                 .await?;
-            
+
             let keys: Vec<String> = init_resp["keys_base64"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let token = init_resp["root_token"].as_str().unwrap_or("").to_string();
-            
+
             // Store keys in OS Keychain (with file fallback)
             let keys_data = serde_json::json!({
                 "unseal_keys_b64": keys,
                 "root_token": token
             });
-            
+
             let mut stored_in_keychain = false;
             if let Err(e) = Self::store_keys_in_keychain(&keys_data.to_string()) {
                 info!("Keychain unavailable ({}), using file fallback only", e);
@@ -297,9 +319,12 @@ disable_mlock = true
             if !stored_in_keychain {
                 println!("  ✅ Vault initialized. Keys saved to {:?}", keys_path);
             } else {
-                println!("  ✅ Vault initialized. Redundant backup saved to {:?}", keys_path);
+                println!(
+                    "  ✅ Vault initialized. Redundant backup saved to {:?}",
+                    keys_path
+                );
             }
-            
+
             (keys, token)
         } else {
             // Load existing keys (try keychain first, then file)
@@ -307,7 +332,7 @@ disable_mlock = true
                 Ok(data) => {
                     println!("  🔑 Vault keys retrieved from OS Keychain");
                     serde_json::from_str(&data)?
-                },
+                }
                 Err(e) => {
                     info!("Keychain lookup failed: {}. Trying file fallback...", e);
                     // Fallback to file
@@ -318,15 +343,19 @@ disable_mlock = true
                     serde_json::from_str(&keys_content)?
                 }
             };
-            
+
             let keys: Vec<String> = keys_data["unseal_keys_b64"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let token = keys_data["root_token"].as_str().unwrap_or("").to_string();
             (keys, token)
         };
-        
+
         // Ensure silo.yaml is in sync with the current token
         if let Ok(mut config) = crate::config::Config::load(&self.config_path) {
             let current_token = config.storage.vault.as_ref().map(|v| v.token.clone());
@@ -340,11 +369,14 @@ disable_mlock = true
                     });
                 }
                 if let Ok(_) = config.save(&self.config_path) {
-                    println!("  ✅ Updated {} with current Vault root token", self.config_path);
+                    println!(
+                        "  ✅ Updated {} with current Vault root token",
+                        self.config_path
+                    );
                 }
             }
         }
-        
+
         // Check seal status and unseal if needed
         let seal_status: serde_json::Value = client
             .get("http://127.0.0.1:8200/v1/sys/seal-status")
@@ -352,7 +384,7 @@ disable_mlock = true
             .await?
             .json()
             .await?;
-        
+
         if seal_status["sealed"].as_bool() == Some(true) {
             for key in &unseal_keys {
                 let _ = client
@@ -363,7 +395,7 @@ disable_mlock = true
             }
             info!("Vault unsealed successfully");
         }
-        
+
         Ok(root_token)
     }
 
@@ -395,7 +427,10 @@ disable_mlock = true
 
         // 1. Create an OIDC assignment (allow all entities)
         let _ = client
-            .post(format!("{}/v1/identity/oidc/assignment/silo-users", vault_address))
+            .post(format!(
+                "{}/v1/identity/oidc/assignment/silo-users",
+                vault_address
+            ))
             .header("X-Vault-Token", vault_token)
             .json(&serde_json::json!({
                 "entity_ids": ["*"],
@@ -423,7 +458,10 @@ disable_mlock = true
             .collect();
 
         let _ = client
-            .post(format!("{}/v1/identity/oidc/client/silo-cli", vault_address))
+            .post(format!(
+                "{}/v1/identity/oidc/client/silo-cli",
+                vault_address
+            ))
             .header("X-Vault-Token", vault_token)
             .json(&serde_json::json!({
                 "redirect_uris": [silo_redirect_uri],
@@ -451,7 +489,6 @@ disable_mlock = true
         Ok(client_secret)
     }
 
-
     /// Check if etcd is installed in PATH
     pub fn check_etcd_installed(&self) -> bool {
         Command::new("etcd")
@@ -468,9 +505,12 @@ disable_mlock = true
         // Start etcd with default settings for local development
         let child = Command::new("etcd")
             .args([
-                "--data-dir", "/tmp/silo-etcd-data",
-                "--listen-client-urls", "http://127.0.0.1:2379",
-                "--advertise-client-urls", "http://127.0.0.1:2379",
+                "--data-dir",
+                "/tmp/silo-etcd-data",
+                "--listen-client-urls",
+                "http://127.0.0.1:2379",
+                "--advertise-client-urls",
+                "http://127.0.0.1:2379",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -496,7 +536,6 @@ disable_mlock = true
         Err("etcd failed to start or respond in time".into())
     }
 
-
     pub fn start_silo_server(
         &self,
         detach: bool,
@@ -519,7 +558,6 @@ disable_mlock = true
                 server_path = abs.to_string_lossy().to_string();
             }
         }
-
 
         let mut cmd = Command::new(server_path);
         cmd.env("SILO_CONFIG", &self.config_path);
